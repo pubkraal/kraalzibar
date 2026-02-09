@@ -122,6 +122,32 @@ impl<T: TupleReader> CheckEngine<T> {
                     }
                     Ok(true)
                 }
+                RewriteRule::Exclusion(base, excluded) => {
+                    let base_result = self
+                        .evaluate_rule(
+                            base,
+                            object_type,
+                            object_id,
+                            subject_type,
+                            subject_id,
+                            snapshot,
+                        )
+                        .await?;
+                    if !base_result {
+                        return Ok(false);
+                    }
+                    let excluded_result = self
+                        .evaluate_rule(
+                            excluded,
+                            object_type,
+                            object_id,
+                            subject_type,
+                            subject_id,
+                            snapshot,
+                        )
+                        .await?;
+                    Ok(!excluded_result)
+                }
                 _ => Ok(false),
             }
         })
@@ -519,6 +545,102 @@ mod tests {
             SubjectRef::direct("user", "alice"),
         )];
         let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(!result.allowed);
+    }
+
+    fn doc_schema_with_exclusion() -> Schema {
+        Schema {
+            types: vec![TypeDefinition {
+                name: "document".to_string(),
+                relations: vec![
+                    RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    },
+                    RelationDef {
+                        name: "blocked".to_string(),
+                        subject_types: vec![],
+                    },
+                ],
+                permissions: vec![PermissionDef {
+                    name: "view".to_string(),
+                    rule: RewriteRule::Exclusion(
+                        Box::new(RewriteRule::This("viewer".to_string())),
+                        Box::new(RewriteRule::This("blocked".to_string())),
+                    ),
+                }],
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn check_exclusion_grants() {
+        let schema = doc_schema_with_exclusion();
+        let tuples = vec![Tuple::new(
+            ObjectRef::new("document", "readme"),
+            "viewer",
+            SubjectRef::direct("user", "alice"),
+        )];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_exclusion_denies_when_excluded() {
+        let schema = doc_schema_with_exclusion();
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            ),
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "blocked",
+                SubjectRef::direct("user", "alice"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_exclusion_denies_when_base_false() {
+        let schema = doc_schema_with_exclusion();
+        let engine = make_engine(schema, vec![]);
 
         let request = CheckRequest {
             object_type: "document".to_string(),
