@@ -51,10 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let factory = Arc::new(InMemoryStoreFactory::new());
-    let service = Arc::new(AuthzService::new(
+    let service = Arc::new(AuthzService::with_cache_config(
         Arc::clone(&factory),
         config.to_engine_config(),
         config.to_schema_limits(),
+        config.cache.clone(),
     ));
 
     let metrics = Arc::new(Metrics::new());

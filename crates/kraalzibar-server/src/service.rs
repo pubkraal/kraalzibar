@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use kraalzibar_core::engine::{
     CheckEngine, CheckRequest, CheckResult, EngineConfig, ExpandEngine, ExpandRequest, ExpandTree,
@@ -11,6 +12,7 @@ use kraalzibar_core::tuple::{SnapshotToken, SubjectRef, TenantId, Tuple, TupleFi
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::adapter::StoreTupleReader;
+use crate::config::CacheConfig;
 use crate::error::ApiError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +75,7 @@ pub struct AuthzService<F: StoreFactory> {
     factory: Arc<F>,
     engine_config: EngineConfig,
     schema_limits: SchemaLimits,
+    schema_cache: moka::future::Cache<TenantId, Arc<Schema>>,
 }
 
 impl<F: StoreFactory> AuthzService<F>
@@ -80,10 +83,29 @@ where
     F::Store: RelationshipStore + SchemaStore,
 {
     pub fn new(factory: Arc<F>, engine_config: EngineConfig, schema_limits: SchemaLimits) -> Self {
+        Self::with_cache_config(
+            factory,
+            engine_config,
+            schema_limits,
+            CacheConfig::default(),
+        )
+    }
+
+    pub fn with_cache_config(
+        factory: Arc<F>,
+        engine_config: EngineConfig,
+        schema_limits: SchemaLimits,
+        cache_config: CacheConfig,
+    ) -> Self {
+        let schema_cache = moka::future::Cache::builder()
+            .max_capacity(cache_config.schema_cache_capacity)
+            .time_to_live(Duration::from_secs(cache_config.schema_cache_ttl_seconds))
+            .build();
         Self {
             factory,
             engine_config,
             schema_limits,
+            schema_cache,
         }
     }
 
@@ -96,14 +118,10 @@ where
         let store = Arc::new(store);
 
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
-        let schema = self.load_schema(&*store).await?;
+        let schema = self.load_schema_cached(tenant_id, &*store).await?;
 
         let reader = StoreTupleReader::new(Arc::clone(&store));
-        let engine = CheckEngine::new(
-            Arc::new(reader),
-            Arc::new(schema),
-            self.engine_config.clone(),
-        );
+        let engine = CheckEngine::new(Arc::new(reader), schema, self.engine_config.clone());
 
         let request = CheckRequest {
             object_type: input.object_type,
@@ -130,14 +148,10 @@ where
         let store = Arc::new(store);
 
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
-        let schema = self.load_schema(&*store).await?;
+        let schema = self.load_schema_cached(tenant_id, &*store).await?;
 
         let reader = StoreTupleReader::new(Arc::clone(&store));
-        let engine = ExpandEngine::new(
-            Arc::new(reader),
-            Arc::new(schema),
-            self.engine_config.clone(),
-        );
+        let engine = ExpandEngine::new(Arc::new(reader), schema, self.engine_config.clone());
 
         let request = ExpandRequest {
             object_type: input.object_type,
@@ -199,6 +213,7 @@ where
         }
 
         store.write_schema(definition).await?;
+        self.schema_cache.invalidate(tenant_id).await;
 
         Ok(WriteSchemaOutput {
             breaking_changes_overridden,
@@ -258,14 +273,10 @@ where
         object_ids.sort();
         object_ids.dedup();
 
-        let schema = self.load_schema(&*store).await?;
+        let schema = self.load_schema_cached(tenant_id, &*store).await?;
 
         let reader = StoreTupleReader::new(Arc::clone(&store));
-        let engine = CheckEngine::new(
-            Arc::new(reader),
-            Arc::new(schema),
-            self.engine_config.clone(),
-        );
+        let engine = CheckEngine::new(Arc::new(reader), schema, self.engine_config.clone());
 
         let limit = input.limit.unwrap_or(1000);
         let mut results = Vec::new();
@@ -293,9 +304,21 @@ where
         Ok(results)
     }
 
-    async fn load_schema<S: SchemaStore>(&self, store: &S) -> Result<Schema, ApiError> {
+    async fn load_schema_cached(
+        &self,
+        tenant_id: &TenantId,
+        store: &impl SchemaStore,
+    ) -> Result<Arc<Schema>, ApiError> {
+        if let Some(cached) = self.schema_cache.get(tenant_id).await {
+            return Ok(cached);
+        }
+
         let schema_text = store.read_schema().await?.ok_or(ApiError::SchemaNotFound)?;
-        Ok(parse_schema(&schema_text)?)
+        let schema = Arc::new(parse_schema(&schema_text)?);
+        self.schema_cache
+            .insert(tenant_id.clone(), Arc::clone(&schema))
+            .await;
+        Ok(schema)
     }
 
     async fn resolve_snapshot<S: RelationshipStore>(
@@ -351,6 +374,75 @@ mod tests {
     use super::*;
     use kraalzibar_core::tuple::ObjectRef;
     use kraalzibar_storage::InMemoryStoreFactory;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use kraalzibar_core::tuple::{
+        SnapshotToken as ST, Tuple as T, TupleFilter as TF, TupleWrite as TW,
+    };
+    use kraalzibar_storage::traits::{RelationshipStore as RS, SchemaStore as SS, StorageError};
+
+    /// A store wrapper that delegates to an inner store and counts read_schema calls.
+    #[derive(Clone)]
+    struct CountingStore {
+        inner: kraalzibar_storage::InMemoryStore,
+        read_schema_count: Arc<AtomicU64>,
+    }
+
+    impl RS for CountingStore {
+        async fn write(&self, writes: &[TW], deletes: &[TF]) -> Result<ST, StorageError> {
+            self.inner.write(writes, deletes).await
+        }
+        async fn read(
+            &self,
+            filter: &TF,
+            snapshot: Option<ST>,
+            limit: Option<usize>,
+        ) -> Result<Vec<T>, StorageError> {
+            self.inner.read(filter, snapshot, limit).await
+        }
+        async fn snapshot(&self) -> Result<ST, StorageError> {
+            self.inner.snapshot().await
+        }
+    }
+
+    impl SS for CountingStore {
+        async fn write_schema(&self, definition: &str) -> Result<(), StorageError> {
+            self.inner.write_schema(definition).await
+        }
+        async fn read_schema(&self) -> Result<Option<String>, StorageError> {
+            self.read_schema_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.read_schema().await
+        }
+    }
+
+    struct CountingStoreFactory {
+        inner: InMemoryStoreFactory,
+        read_schema_count: Arc<AtomicU64>,
+    }
+
+    impl CountingStoreFactory {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryStoreFactory::new(),
+                read_schema_count: Arc::new(AtomicU64::new(0)),
+            }
+        }
+
+        fn read_schema_count(&self) -> u64 {
+            self.read_schema_count.load(Ordering::SeqCst)
+        }
+    }
+
+    impl kraalzibar_storage::traits::StoreFactory for CountingStoreFactory {
+        type Store = CountingStore;
+
+        fn for_tenant(&self, tenant_id: &TenantId) -> CountingStore {
+            CountingStore {
+                inner: self.inner.for_tenant(tenant_id),
+                read_schema_count: Arc::clone(&self.read_schema_count),
+            }
+        }
+    }
 
     const SCHEMA: &str = r#"
         definition user {}
@@ -383,15 +475,18 @@ mod tests {
             .unwrap();
     }
 
-    async fn write_tuple(
-        service: &AuthzService<InMemoryStoreFactory>,
+    async fn write_tuple<F: StoreFactory>(
+        service: &AuthzService<F>,
         tenant_id: &TenantId,
         object_type: &str,
         object_id: &str,
         relation: &str,
         subject_type: &str,
         subject_id: &str,
-    ) -> SnapshotToken {
+    ) -> SnapshotToken
+    where
+        F::Store: RelationshipStore + SchemaStore,
+    {
         service
             .write_relationships(
                 tenant_id,
@@ -786,6 +881,253 @@ mod tests {
         assert!(
             matches!(result, Err(ApiError::SchemaNotFound)),
             "expected SchemaNotFound, got: {result:?}"
+        );
+    }
+
+    // --- 4A: Schema Cache Tests ---
+
+    fn make_counting_service() -> (
+        AuthzService<CountingStoreFactory>,
+        TenantId,
+        Arc<CountingStoreFactory>,
+    ) {
+        let factory = Arc::new(CountingStoreFactory::new());
+        let service = AuthzService::new(
+            Arc::clone(&factory),
+            EngineConfig::default(),
+            SchemaLimits::default(),
+        );
+        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
+        (service, tenant_id, factory)
+    }
+
+    #[tokio::test]
+    async fn schema_cache_avoids_repeated_storage_reads() {
+        let (service, tenant_id, factory) = make_counting_service();
+
+        // Write schema
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            factory.read_schema_count(),
+            1,
+            "write_schema reads existing schema"
+        );
+
+        // First check — should read schema from store (cache miss)
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+        service
+            .check_permission(
+                &tenant_id,
+                CheckPermissionInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await
+            .unwrap();
+
+        let count_after_first = factory.read_schema_count();
+
+        // Second check — should use cached schema (no new read_schema call)
+        service
+            .check_permission(
+                &tenant_id,
+                CheckPermissionInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            factory.read_schema_count(),
+            count_after_first,
+            "second check should use cached schema"
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_cache_invalidated_on_write_schema() {
+        let (service, tenant_id, _factory) = make_counting_service();
+
+        // Write initial schema (no permission can_edit)
+        let schema_v1 = r#"
+            definition user {}
+            definition document {
+                relation viewer: user
+                permission can_view = viewer
+            }
+        "#;
+        service
+            .write_schema(&tenant_id, schema_v1, false)
+            .await
+            .unwrap();
+
+        // Warm cache by checking
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+        service
+            .check_permission(
+                &tenant_id,
+                CheckPermissionInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Write new schema with can_edit permission (force: breaking change removes can_view)
+        let schema_v2 = r#"
+            definition user {}
+            definition document {
+                relation viewer: user
+                relation editor: user
+                permission can_view = viewer + editor
+                permission can_edit = editor
+            }
+        "#;
+        service
+            .write_schema(&tenant_id, schema_v2, true)
+            .await
+            .unwrap();
+
+        // Now check can_edit — this should work with the new schema
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "editor", "user", "bob",
+        )
+        .await;
+        let result = service
+            .check_permission(
+                &tenant_id,
+                CheckPermissionInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_edit".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "bob".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result.allowed,
+            "should use new schema with can_edit permission"
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_cache_isolated_per_tenant() {
+        let (service, tenant_a, _factory) = make_counting_service();
+        let tenant_b = TenantId::new(uuid::Uuid::new_v4());
+
+        let schema_a = r#"
+            definition user {}
+            definition document {
+                relation viewer: user
+                permission can_view = viewer
+            }
+        "#;
+        let schema_b = r#"
+            definition user {}
+            definition folder {
+                relation reader: user
+                permission can_read = reader
+            }
+        "#;
+
+        service
+            .write_schema(&tenant_a, schema_a, false)
+            .await
+            .unwrap();
+        service
+            .write_schema(&tenant_b, schema_b, false)
+            .await
+            .unwrap();
+
+        write_tuple(
+            &service, &tenant_a, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+        write_tuple(
+            &service, &tenant_b, "folder", "root", "reader", "user", "bob",
+        )
+        .await;
+
+        // Tenant A check should use document schema
+        let result_a = service
+            .check_permission(
+                &tenant_a,
+                CheckPermissionInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(result_a.allowed);
+
+        // Tenant B check should use folder schema
+        let result_b = service
+            .check_permission(
+                &tenant_b,
+                CheckPermissionInput {
+                    object_type: "folder".to_string(),
+                    object_id: "root".to_string(),
+                    permission: "can_read".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "bob".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(result_b.allowed);
+
+        // Cross-check: tenant A should NOT have folder type
+        let result_cross = service
+            .check_permission(
+                &tenant_a,
+                CheckPermissionInput {
+                    object_type: "folder".to_string(),
+                    object_id: "root".to_string(),
+                    permission: "can_read".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "bob".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                },
+            )
+            .await;
+        assert!(
+            result_cross.is_err(),
+            "tenant A should not have folder schema"
         );
     }
 }

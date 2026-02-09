@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub engine: EngineConfigValues,
     pub schema_limits: SchemaLimitsConfig,
     pub log: LogConfig,
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -53,6 +54,13 @@ pub struct SchemaLimitsConfig {
 pub struct LogConfig {
     pub format: LogFormat,
     pub level: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct CacheConfig {
+    pub schema_cache_capacity: u64,
+    pub schema_cache_ttl_seconds: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -105,6 +113,15 @@ impl Default for SchemaLimitsConfig {
             max_types: 50,
             max_relations_per_type: 30,
             max_permissions_per_type: 30,
+        }
+    }
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            schema_cache_capacity: 1000,
+            schema_cache_ttl_seconds: 30,
         }
     }
 }
@@ -216,6 +233,16 @@ impl AppConfig {
         if self.schema_limits.max_permissions_per_type == 0 {
             return Err(ConfigError::Validation(
                 "schema_limits.max_permissions_per_type must be non-zero".to_string(),
+            ));
+        }
+        if self.cache.schema_cache_capacity == 0 {
+            return Err(ConfigError::Validation(
+                "cache.schema_cache_capacity must be non-zero".to_string(),
+            ));
+        }
+        if self.cache.schema_cache_ttl_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "cache.schema_cache_ttl_seconds must be non-zero".to_string(),
             ));
         }
         Ok(())
@@ -365,6 +392,30 @@ port = 9090
         let result = config.validate();
         assert!(
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_types"))
+        );
+    }
+
+    #[test]
+    fn cache_config_exposed_in_app_config() {
+        let toml_str = r#"
+[cache]
+schema_cache_capacity = 500
+schema_cache_ttl_seconds = 60
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.cache.schema_cache_capacity, 500);
+        assert_eq!(config.cache.schema_cache_ttl_seconds, 60);
+    }
+
+    #[test]
+    fn cache_config_validates_nonzero_capacity() {
+        let mut config = AppConfig::default();
+        config.cache.schema_cache_capacity = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("schema_cache_capacity"))
         );
     }
 }
