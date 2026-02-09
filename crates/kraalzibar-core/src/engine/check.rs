@@ -151,11 +151,28 @@ impl<T: TupleReader> CheckEngine<T> {
             let tuples = self.reader.read_tuples(&filter, ctx.snapshot).await?;
 
             for tuple in &tuples {
-                if tuple.subject.subject_relation.is_none()
-                    && tuple.subject.subject_type == ctx.subject_type
-                    && tuple.subject.subject_id == ctx.subject_id
-                {
-                    return Ok(true);
+                if tuple.subject.subject_relation.is_none() {
+                    if tuple.subject.subject_type == ctx.subject_type
+                        && tuple.subject.subject_id == ctx.subject_id
+                    {
+                        return Ok(true);
+                    }
+                } else if let Some(ref rel) = tuple.subject.subject_relation {
+                    let userset_filter = TupleFilter {
+                        object_type: Some(tuple.subject.subject_type.clone()),
+                        object_id: Some(tuple.subject.subject_id.clone()),
+                        relation: Some(rel.clone()),
+                        subject_type: Some(ctx.subject_type.to_string()),
+                        subject_id: Some(ctx.subject_id.to_string()),
+                        subject_relation: Some(None),
+                    };
+                    let userset_tuples = self
+                        .reader
+                        .read_tuples(&userset_filter, ctx.snapshot)
+                        .await?;
+                    if !userset_tuples.is_empty() {
+                        return Ok(true);
+                    }
                 }
             }
 
@@ -753,5 +770,61 @@ mod tests {
 
         let result = engine.check(&request).await.unwrap();
         assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_userset_traverses_group_membership() {
+        // Schema: document has viewer relation, group has member relation
+        // document:readme#viewer@group:eng#member (userset subject)
+        // group:eng#member@user:alice (alice is a member of eng)
+        // Check: can user:alice view document:readme? -> yes, via group membership
+        let schema = Schema {
+            types: vec![
+                TypeDefinition {
+                    name: "group".to_string(),
+                    relations: vec![RelationDef {
+                        name: "member".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![],
+                },
+                TypeDefinition {
+                    name: "document".to_string(),
+                    relations: vec![RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::This("viewer".to_string()),
+                    }],
+                },
+            ],
+        };
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "viewer",
+                SubjectRef::userset("group", "eng", "member"),
+            ),
+            Tuple::new(
+                ObjectRef::new("group", "eng"),
+                "member",
+                SubjectRef::direct("user", "alice"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
     }
 }
