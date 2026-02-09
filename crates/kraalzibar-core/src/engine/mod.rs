@@ -29,6 +29,7 @@ pub enum CheckError {
     StorageError(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub max_depth: usize,
     pub max_concurrent_branches: usize,
