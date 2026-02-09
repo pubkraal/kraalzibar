@@ -994,6 +994,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraalzibar-server"
+version = "0.1.0"
+dependencies = [
+ "kraalzibar-core",
+ "kraalzibar-storage",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "kraalzibar-storage"
 version = "0.1.0"
 dependencies = [
