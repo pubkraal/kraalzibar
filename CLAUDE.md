@@ -136,3 +136,21 @@ configuration instructions as they become available.
   applying them in order. The `bind_idx` counter tracks `$1`, `$2`, etc.
 - **`InMemoryStore::new()`** should be `pub` — it's needed by tests across
   module boundaries (e.g., GC tests use in-memory store directly).
+- **Recursive async functions in Rust** cannot use `async fn` directly due to
+  E0733 (opaque type of infinite size). Return
+  `Pin<Box<dyn Future<Output = ...> + Send + 'a>>` with `Box::pin(async move { ... })`.
+- **`TupleReader` trait lives in `kraalzibar-core`** (not storage) to avoid
+  circular dependency. The engine is generic over `T: TupleReader`; storage
+  crates implement the trait. For tests, a simple `TestStore` with `Vec<Tuple>`
+  suffices.
+- **Clippy `too_many_arguments`** triggers at 7+ params. Bundle related params
+  into context structs (e.g., `CheckContext`, `ExpandContext`) early rather than
+  accumulating individual parameters.
+- **Permissions shadow relations** in `This(name)` resolution — check
+  permissions first, then relations. This matches Zanzibar/SpiceDB semantics.
+- **Cycles in the permission graph return `false`** (not errors) — matching
+  Zanzibar semantics. Use a per-branch `HashSet<(String, String, String)>`
+  visited set. Clone the set when branching.
+- **Context structs must own Strings** (not borrow) when used in recursive
+  async evaluation, because each branch needs its own depth counter and visited
+  set that can be cloned independently.
