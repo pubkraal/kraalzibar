@@ -3,6 +3,7 @@ use std::sync::Arc;
 use kraalzibar_core::engine::{
     CheckEngine, CheckRequest, CheckResult, EngineConfig, ExpandEngine, ExpandRequest, ExpandTree,
 };
+use kraalzibar_core::schema::types::Schema;
 use kraalzibar_core::schema::{
     SchemaLimits, detect_breaking_changes, parse_schema, validate_schema_limits,
 };
@@ -20,6 +21,7 @@ pub enum Consistency {
     AtExactSnapshot(SnapshotToken),
 }
 
+#[derive(Debug)]
 pub struct CheckPermissionInput {
     pub object_type: String,
     pub object_id: String,
@@ -35,6 +37,7 @@ pub struct CheckPermissionOutput {
     pub snapshot: Option<SnapshotToken>,
 }
 
+#[derive(Debug)]
 pub struct ExpandPermissionInput {
     pub object_type: String,
     pub object_id: String,
@@ -42,6 +45,7 @@ pub struct ExpandPermissionInput {
     pub consistency: Consistency,
 }
 
+#[derive(Debug)]
 pub struct LookupSubjectsInput {
     pub object_type: String,
     pub object_id: String,
@@ -50,6 +54,7 @@ pub struct LookupSubjectsInput {
     pub consistency: Consistency,
 }
 
+#[derive(Debug)]
 pub struct LookupResourcesInput {
     pub resource_type: String,
     pub permission: String,
@@ -91,13 +96,7 @@ where
         let store = Arc::new(store);
 
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
-
-        let schema_text = store
-            .read_schema()
-            .await
-            .map_err(ApiError::from)?
-            .ok_or(ApiError::SchemaNotFound)?;
-        let schema = parse_schema(&schema_text)?;
+        let schema = self.load_schema(&*store).await?;
 
         let reader = StoreTupleReader::new(Arc::clone(&store));
         let engine = CheckEngine::new(
@@ -131,13 +130,7 @@ where
         let store = Arc::new(store);
 
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
-
-        let schema_text = store
-            .read_schema()
-            .await
-            .map_err(ApiError::from)?
-            .ok_or(ApiError::SchemaNotFound)?;
-        let schema = parse_schema(&schema_text)?;
+        let schema = self.load_schema(&*store).await?;
 
         let reader = StoreTupleReader::new(Arc::clone(&store));
         let engine = ExpandEngine::new(
@@ -199,12 +192,10 @@ where
             let old_schema = parse_schema(old_text)?;
             let breaking = detect_breaking_changes(&old_schema, &new_schema);
 
-            if !breaking.is_empty() {
-                if !force {
-                    return Err(ApiError::BreakingChanges(breaking));
-                }
-                breaking_changes_overridden = true;
+            if !breaking.is_empty() && !force {
+                return Err(ApiError::BreakingChanges(breaking));
             }
+            breaking_changes_overridden = !breaking.is_empty();
         }
 
         store.write_schema(definition).await?;
@@ -248,7 +239,8 @@ where
         input: LookupResourcesInput,
     ) -> Result<Vec<String>, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
-        let snapshot = self.resolve_snapshot(&store, input.consistency).await?;
+        let store = Arc::new(store);
+        let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
 
         let filter = TupleFilter {
             object_type: Some(input.resource_type.clone()),
@@ -261,14 +253,8 @@ where
         object_ids.sort();
         object_ids.dedup();
 
-        let schema_text = store
-            .read_schema()
-            .await
-            .map_err(ApiError::from)?
-            .ok_or(ApiError::SchemaNotFound)?;
-        let schema = parse_schema(&schema_text)?;
+        let schema = self.load_schema(&*store).await?;
 
-        let store = Arc::new(store);
         let reader = StoreTupleReader::new(Arc::clone(&store));
         let engine = CheckEngine::new(
             Arc::new(reader),
@@ -300,6 +286,11 @@ where
         }
 
         Ok(results)
+    }
+
+    async fn load_schema<S: SchemaStore>(&self, store: &S) -> Result<Schema, ApiError> {
+        let schema_text = store.read_schema().await?.ok_or(ApiError::SchemaNotFound)?;
+        Ok(parse_schema(&schema_text)?)
     }
 
     async fn resolve_snapshot<S: RelationshipStore>(
