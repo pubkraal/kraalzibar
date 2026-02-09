@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::schema::types::{RewriteRule, Schema};
@@ -62,29 +64,49 @@ impl<T: TupleReader> CheckEngine<T> {
         Ok(CheckResult { allowed })
     }
 
-    async fn evaluate_rule(
-        &self,
-        rule: &RewriteRule,
-        object_type: &str,
-        object_id: &str,
-        subject_type: &str,
-        subject_id: &str,
+    fn evaluate_rule<'a>(
+        &'a self,
+        rule: &'a RewriteRule,
+        object_type: &'a str,
+        object_id: &'a str,
+        subject_type: &'a str,
+        subject_id: &'a str,
         snapshot: Option<SnapshotToken>,
-    ) -> Result<bool, CheckError> {
-        match rule {
-            RewriteRule::This(name) => {
-                self.evaluate_this(
-                    name,
-                    object_type,
-                    object_id,
-                    subject_type,
-                    subject_id,
-                    snapshot,
-                )
-                .await
+    ) -> Pin<Box<dyn Future<Output = Result<bool, CheckError>> + Send + 'a>> {
+        Box::pin(async move {
+            match rule {
+                RewriteRule::This(name) => {
+                    self.evaluate_this(
+                        name,
+                        object_type,
+                        object_id,
+                        subject_type,
+                        subject_id,
+                        snapshot,
+                    )
+                    .await
+                }
+                RewriteRule::Union(children) => {
+                    for child in children {
+                        if self
+                            .evaluate_rule(
+                                child,
+                                object_type,
+                                object_id,
+                                subject_type,
+                                subject_id,
+                                snapshot,
+                            )
+                            .await?
+                        {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                }
+                _ => Ok(false),
             }
-            _ => Ok(false),
-        }
+        })
     }
 
     async fn evaluate_this(
@@ -307,6 +329,100 @@ mod tests {
             SubjectRef::direct("user", "bob"),
         )];
         let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(!result.allowed);
+    }
+
+    fn doc_schema_with_union_view() -> Schema {
+        Schema {
+            types: vec![TypeDefinition {
+                name: "document".to_string(),
+                relations: vec![
+                    RelationDef {
+                        name: "owner".to_string(),
+                        subject_types: vec![],
+                    },
+                    RelationDef {
+                        name: "editor".to_string(),
+                        subject_types: vec![],
+                    },
+                    RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    },
+                ],
+                permissions: vec![PermissionDef {
+                    name: "view".to_string(),
+                    rule: RewriteRule::Union(vec![
+                        RewriteRule::This("owner".to_string()),
+                        RewriteRule::This("editor".to_string()),
+                        RewriteRule::This("viewer".to_string()),
+                    ]),
+                }],
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn check_union_grants_on_first_branch() {
+        let schema = doc_schema_with_union_view();
+        let tuples = vec![Tuple::new(
+            ObjectRef::new("document", "readme"),
+            "owner",
+            SubjectRef::direct("user", "alice"),
+        )];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_union_grants_on_second_branch() {
+        let schema = doc_schema_with_union_view();
+        let tuples = vec![Tuple::new(
+            ObjectRef::new("document", "readme"),
+            "editor",
+            SubjectRef::direct("user", "alice"),
+        )];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_union_denies_when_no_branch_matches() {
+        let schema = doc_schema_with_union_view();
+        let engine = make_engine(schema, vec![]);
 
         let request = CheckRequest {
             object_type: "document".to_string(),
