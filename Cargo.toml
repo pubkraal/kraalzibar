@@ -3,4 +3,5 @@ resolver = "3"
 members = [
     "crates/kraalzibar-core",
     "crates/kraalzibar-storage",
+    "crates/kraalzibar-server",
 ]
