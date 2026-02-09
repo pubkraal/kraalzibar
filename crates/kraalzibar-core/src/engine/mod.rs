@@ -1,6 +1,10 @@
 mod check;
+mod expand;
 
 pub use check::{CheckEngine, CheckRequest, CheckResult};
+pub use expand::{ExpandEngine, ExpandRequest, ExpandTree};
+
+use std::future::Future;
 
 use crate::tuple::{SnapshotToken, Tuple, TupleFilter};
 
@@ -46,5 +50,3 @@ pub trait TupleReader: Send + Sync {
         snapshot: Option<SnapshotToken>,
     ) -> impl Future<Output = Result<Vec<Tuple>, CheckError>> + Send;
 }
-
-use std::future::Future;

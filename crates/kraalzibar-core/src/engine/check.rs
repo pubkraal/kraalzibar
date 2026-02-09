@@ -168,27 +168,30 @@ impl<T: TupleReader> CheckEngine<T> {
             let tuples = self.reader.read_tuples(&filter, ctx.snapshot).await?;
 
             for tuple in &tuples {
-                if tuple.subject.subject_relation.is_none() {
-                    if tuple.subject.subject_type == ctx.subject_type
-                        && tuple.subject.subject_id == ctx.subject_id
-                    {
-                        return Ok(true);
+                match &tuple.subject.subject_relation {
+                    None => {
+                        if tuple.subject.subject_type == ctx.subject_type
+                            && tuple.subject.subject_id == ctx.subject_id
+                        {
+                            return Ok(true);
+                        }
                     }
-                } else if let Some(ref rel) = tuple.subject.subject_relation {
-                    let userset_filter = TupleFilter {
-                        object_type: Some(tuple.subject.subject_type.clone()),
-                        object_id: Some(tuple.subject.subject_id.clone()),
-                        relation: Some(rel.clone()),
-                        subject_type: Some(ctx.subject_type.to_string()),
-                        subject_id: Some(ctx.subject_id.to_string()),
-                        subject_relation: Some(None),
-                    };
-                    let userset_tuples = self
-                        .reader
-                        .read_tuples(&userset_filter, ctx.snapshot)
-                        .await?;
-                    if !userset_tuples.is_empty() {
-                        return Ok(true);
+                    Some(rel) => {
+                        let userset_filter = TupleFilter {
+                            object_type: Some(tuple.subject.subject_type.clone()),
+                            object_id: Some(tuple.subject.subject_id.clone()),
+                            relation: Some(rel.clone()),
+                            subject_type: Some(ctx.subject_type.to_string()),
+                            subject_id: Some(ctx.subject_id.to_string()),
+                            subject_relation: Some(None),
+                        };
+                        let userset_tuples = self
+                            .reader
+                            .read_tuples(&userset_filter, ctx.snapshot)
+                            .await?;
+                        if !userset_tuples.is_empty() {
+                            return Ok(true);
+                        }
                     }
                 }
             }
@@ -299,24 +302,6 @@ mod tests {
             Arc::new(schema),
             EngineConfig::default(),
         )
-    }
-
-    #[allow(dead_code)]
-    fn simple_schema_with_permission(
-        type_name: &str,
-        permission_name: &str,
-        rule: RewriteRule,
-    ) -> Schema {
-        Schema {
-            types: vec![TypeDefinition {
-                name: type_name.to_string(),
-                relations: vec![],
-                permissions: vec![PermissionDef {
-                    name: permission_name.to_string(),
-                    rule,
-                }],
-            }],
-        }
     }
 
     fn doc_schema_with_viewer() -> Schema {
