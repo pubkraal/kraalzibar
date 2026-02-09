@@ -149,6 +149,14 @@ impl<T: TupleReader> CheckEngine<T> {
             .get_type(object_type)
             .ok_or_else(|| CheckError::TypeNotFound(object_type.to_string()))?;
 
+        if let Some(perm_def) = type_def.get_permission(name) {
+            let mut child_ctx = ctx.clone();
+            child_ctx.depth += 1;
+            return self
+                .evaluate_rule(&perm_def.rule, object_type, object_id, child_ctx)
+                .await;
+        }
+
         if type_def.get_relation(name).is_some() {
             let filter = TupleFilter {
                 object_type: Some(object_type.to_string()),
@@ -1001,5 +1009,119 @@ mod tests {
         // Should return false (no access), NOT an error
         let result = engine.check(&request).await.unwrap();
         assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_memoization_correctness() {
+        // Diamond: doc -> folder_a -> root, doc -> folder_b -> root
+        // Both paths converge on root. Memoization should not cause incorrect results.
+        let schema = Schema {
+            types: vec![
+                TypeDefinition {
+                    name: "folder".to_string(),
+                    relations: vec![RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::This("viewer".to_string()),
+                    }],
+                },
+                TypeDefinition {
+                    name: "document".to_string(),
+                    relations: vec![
+                        RelationDef {
+                            name: "parent_a".to_string(),
+                            subject_types: vec![],
+                        },
+                        RelationDef {
+                            name: "parent_b".to_string(),
+                            subject_types: vec![],
+                        },
+                    ],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::Union(vec![
+                            RewriteRule::Arrow("parent_a".to_string(), "view".to_string()),
+                            RewriteRule::Arrow("parent_b".to_string(), "view".to_string()),
+                        ]),
+                    }],
+                },
+            ],
+        };
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "parent_a",
+                SubjectRef::direct("folder", "root"),
+            ),
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "parent_b",
+                SubjectRef::direct("folder", "root"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "root"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_permission_references_permission() {
+        // "can_edit" = This("editor")
+        // "can_view" = This("can_edit") -- references another permission, not a relation
+        let schema = Schema {
+            types: vec![TypeDefinition {
+                name: "document".to_string(),
+                relations: vec![RelationDef {
+                    name: "editor".to_string(),
+                    subject_types: vec![],
+                }],
+                permissions: vec![
+                    PermissionDef {
+                        name: "can_edit".to_string(),
+                        rule: RewriteRule::This("editor".to_string()),
+                    },
+                    PermissionDef {
+                        name: "can_view".to_string(),
+                        rule: RewriteRule::This("can_edit".to_string()),
+                    },
+                ],
+            }],
+        };
+        let tuples = vec![Tuple::new(
+            ObjectRef::new("document", "readme"),
+            "editor",
+            SubjectRef::direct("user", "alice"),
+        )];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "can_view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
     }
 }
