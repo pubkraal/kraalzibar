@@ -10,7 +10,9 @@ path = "src/main.rs"
 [dependencies]
 kraalzibar-core = { path = "../kraalzibar-core" }
 kraalzibar-storage = { path = "../kraalzibar-storage" }
+argon2 = "0.5"
 prost = "0.13"
+rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
