@@ -1,0 +1,17 @@
+schema          = { SOI ~ definition* ~ EOI }
+definition      = { "definition" ~ identifier ~ "{" ~ definition_body ~ "}" }
+definition_body = { (relation_def | permission_def)* }
+relation_def    = { "relation" ~ identifier ~ ":" ~ subject_type_list }
+subject_type_list = { subject_type_ref ~ ("|" ~ subject_type_ref)* }
+subject_type_ref  = { identifier ~ ("#" ~ identifier)? }
+permission_def  = { "permission" ~ identifier ~ "=" ~ permission_expr }
+permission_expr = { permission_term ~ (permission_op ~ permission_term)* }
+permission_op   = _{ union_op | intersection_op | exclusion_op }
+union_op        = { "+" }
+intersection_op = { "&" }
+exclusion_op    = { "-" }
+permission_term = { arrow_expr | identifier }
+arrow_expr      = { identifier ~ "->" ~ identifier }
+identifier      = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+WHITESPACE      = _{ " " | "\t" | NEWLINE }
+COMMENT         = _{ "//" ~ (!NEWLINE ~ ANY)* }

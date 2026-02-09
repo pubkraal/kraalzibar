@@ -116,5 +116,23 @@ configuration instructions as they become available.
 
 ## Gotchas and Learnings
 
-Update this section as the project progresses with things you wish you knew
-at the start.
+- **Rust edition 2024 is valid** with Rust 1.85+. `resolver = "3"` in the
+  workspace Cargo.toml is the edition 2024 equivalent of `resolver = "2"`.
+- **Native async fn in traits** works in edition 2024 — no `async-trait`
+  crate needed. Add `Send + Sync` super-traits on the trait itself.
+- **`std::sync::Mutex`** (not tokio Mutex) is correct for the in-memory store
+  because critical sections are CPU-bound and short.
+- **`TupleFilter.subject_relation` uses `Option<Option<String>>`** — outer
+  `None` = don't filter, `Some(None)` = must be direct, `Some(Some(r))` = must
+  match relation `r`. This is a key design choice that pervades the storage layer.
+- **Pest grammar** does not enforce "no mixed operators" — that's a semantic
+  check in the parser, not in the grammar rules.
+- **PG sequence `last_value`** starts at 1 but `is_called` is false until first
+  `nextval()`. Use `COALESCE(... WHERE is_called = true, 0)` to get 0 for
+  fresh sequences.
+- **Testcontainers tests** must hold the container in a variable (`_container`)
+  for the entire test — dropping it stops the container.
+- **sqlx dynamic queries** require building bind parameters as a vec and
+  applying them in order. The `bind_idx` counter tracks `$1`, `$2`, etc.
+- **`InMemoryStore::new()`** should be `pub` — it's needed by tests across
+  module boundaries (e.g., GC tests use in-memory store directly).
