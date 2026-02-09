@@ -154,3 +154,14 @@ configuration instructions as they become available.
 - **Context structs must own Strings** (not borrow) when used in recursive
   async evaluation, because each branch needs its own depth counter and visited
   set that can be cloned independently.
+- **`StoreTupleReader` adapter** bridges `RelationshipStore` → `TupleReader` in
+  the server crate. Maps `StorageError` → `CheckError::StorageError`. Lives in
+  `crates/kraalzibar-server/src/adapter.rs`.
+- **`AuthzService<F: StoreFactory>`** is the shared service layer. Both gRPC and
+  REST handlers call it. Each request creates a fresh store from the factory,
+  reads the schema, builds an engine, and evaluates. Schema is not cached yet.
+- **`EngineConfig` needs `Clone`** since the service creates engines per-request.
+  Added `#[derive(Clone)]` in Phase 3.
+- **`lookup_resources`** scans all tuples for a type, deduplicates object IDs,
+  then checks each one. Default limit is 1000. This is O(n) and correct but
+  slow for large datasets — optimize in later phases.
