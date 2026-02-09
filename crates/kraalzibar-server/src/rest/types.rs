@@ -158,8 +158,3 @@ pub enum ConsistencyRequest {
     #[serde(rename = "at_exact_snapshot")]
     AtExactSnapshot { token: String },
 }
-
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}

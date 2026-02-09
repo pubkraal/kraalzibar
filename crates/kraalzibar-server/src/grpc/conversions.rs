@@ -71,9 +71,7 @@ pub fn proto_consistency_to_domain(
     consistency: Option<&v1::Consistency>,
 ) -> Result<Consistency, tonic::Status> {
     match consistency.and_then(|c| c.requirement.as_ref()) {
-        Some(v1::consistency::Requirement::FullConsistency(true)) => {
-            Ok(Consistency::FullConsistency)
-        }
+        Some(v1::consistency::Requirement::FullConsistency(_)) => Ok(Consistency::FullConsistency),
         Some(v1::consistency::Requirement::AtLeastAsFresh(token)) => {
             Ok(Consistency::AtLeastAsFresh(zed_token_to_snapshot(token)?))
         }

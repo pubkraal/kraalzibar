@@ -2,6 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use serde::Serialize;
 
 use kraalzibar_core::engine::ExpandTree;
 use kraalzibar_core::tuple::{ObjectRef, SnapshotToken, SubjectRef, TupleFilter, TupleWrite};
@@ -16,36 +17,57 @@ use crate::service::{
 use super::AppState;
 use super::types::*;
 
-fn resolve_consistency(
-    c: Option<&ConsistencyRequest>,
-) -> Result<Consistency, (StatusCode, Json<serde_json::Value>)> {
+const MAX_BATCH_SIZE: usize = 1000;
+const MAX_IDENTIFIER_LENGTH: usize = 256;
+const DEFAULT_READ_LIMIT: usize = 1000;
+
+type ApiResult = (StatusCode, Json<serde_json::Value>);
+
+fn json_response<T: Serialize>(status: StatusCode, body: &T) -> ApiResult {
+    match serde_json::to_value(body) {
+        Ok(v) => (status, Json(v)),
+        Err(e) => {
+            tracing::error!(error = %e, "response serialization failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "internal server error"})),
+            )
+        }
+    }
+}
+
+fn error_response(status: StatusCode, msg: &str) -> ApiResult {
+    (status, Json(serde_json::json!({"error": msg})))
+}
+
+fn validate_identifier(field: &str, value: &str) -> Result<(), ApiResult> {
+    if value.is_empty() {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("{field} must not be empty"),
+        ));
+    }
+    if value.len() > MAX_IDENTIFIER_LENGTH {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("{field} exceeds maximum length of {MAX_IDENTIFIER_LENGTH}"),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_consistency(c: Option<&ConsistencyRequest>) -> Result<Consistency, ApiResult> {
     match c {
         Some(ConsistencyRequest::Full) => Ok(Consistency::FullConsistency),
         Some(ConsistencyRequest::AtLeastAsFresh { token }) => {
             let val: u64 = token.parse().map_err(|_| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::to_value(ErrorResponse {
-                            error: "invalid snapshot token format".to_string(),
-                        })
-                        .unwrap(),
-                    ),
-                )
+                error_response(StatusCode::BAD_REQUEST, "invalid snapshot token format")
             })?;
             Ok(Consistency::AtLeastAsFresh(SnapshotToken::new(val)))
         }
         Some(ConsistencyRequest::AtExactSnapshot { token }) => {
             let val: u64 = token.parse().map_err(|_| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::to_value(ErrorResponse {
-                            error: "invalid snapshot token format".to_string(),
-                        })
-                        .unwrap(),
-                    ),
-                )
+                error_response(StatusCode::BAD_REQUEST, "invalid snapshot token format")
             })?;
             Ok(Consistency::AtExactSnapshot(SnapshotToken::new(val)))
         }
@@ -53,28 +75,26 @@ fn resolve_consistency(
     }
 }
 
-fn api_error_to_response(err: ApiError) -> (StatusCode, Json<ErrorResponse>) {
+fn api_error_to_response(err: ApiError) -> ApiResult {
     use kraalzibar_core::engine::CheckError;
 
-    let status = match &err {
+    match &err {
         ApiError::Check(CheckError::TypeNotFound(_))
         | ApiError::Check(CheckError::PermissionNotFound { .. })
         | ApiError::Check(CheckError::RelationNotFound { .. })
-        | ApiError::SchemaNotFound => StatusCode::NOT_FOUND,
-        ApiError::Check(CheckError::MaxDepthExceeded(_)) => StatusCode::UNPROCESSABLE_ENTITY,
-        ApiError::Parse(_) | ApiError::Validation(_) => StatusCode::BAD_REQUEST,
-        ApiError::BreakingChanges(_) => StatusCode::CONFLICT,
-        ApiError::Check(CheckError::StorageError(_)) | ApiError::Storage(_) => {
-            StatusCode::INTERNAL_SERVER_ERROR
+        | ApiError::SchemaNotFound => error_response(StatusCode::NOT_FOUND, &err.to_string()),
+        ApiError::Check(CheckError::MaxDepthExceeded(_)) => {
+            error_response(StatusCode::UNPROCESSABLE_ENTITY, &err.to_string())
         }
-    };
-
-    (
-        status,
-        Json(ErrorResponse {
-            error: err.to_string(),
-        }),
-    )
+        ApiError::Parse(_) | ApiError::Validation(_) => {
+            error_response(StatusCode::BAD_REQUEST, &err.to_string())
+        }
+        ApiError::BreakingChanges(_) => error_response(StatusCode::CONFLICT, &err.to_string()),
+        ApiError::Check(CheckError::StorageError(_)) | ApiError::Storage(_) => {
+            tracing::error!(error = %err, "internal storage error");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+        }
+    }
 }
 
 pub async fn check_permission<F>(
@@ -85,6 +105,15 @@ where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
+    if let Err(e) = validate_identifier("resource_type", &req.resource_type)
+        .and_then(|()| validate_identifier("resource_id", &req.resource_id))
+        .and_then(|()| validate_identifier("permission", &req.permission))
+        .and_then(|()| validate_identifier("subject_type", &req.subject_type))
+        .and_then(|()| validate_identifier("subject_id", &req.subject_id))
+    {
+        return e;
+    }
+
     let input = CheckPermissionInput {
         object_type: req.resource_type,
         object_id: req.resource_id,
@@ -104,21 +133,15 @@ where
     {
         Ok(result) => {
             let checked_at = result.snapshot.map(|s| s.value().to_string());
-            (
+            json_response(
                 StatusCode::OK,
-                Json(
-                    serde_json::to_value(CheckPermissionResponse {
-                        allowed: result.allowed,
-                        checked_at,
-                    })
-                    .unwrap(),
-                ),
+                &CheckPermissionResponse {
+                    allowed: result.allowed,
+                    checked_at,
+                },
             )
         }
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -130,6 +153,13 @@ where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
+    if let Err(e) = validate_identifier("resource_type", &req.resource_type)
+        .and_then(|()| validate_identifier("resource_id", &req.resource_id))
+        .and_then(|()| validate_identifier("permission", &req.permission))
+    {
+        return e;
+    }
+
     let input = ExpandPermissionInput {
         object_type: req.resource_type,
         object_id: req.resource_id,
@@ -147,15 +177,12 @@ where
     {
         Ok(tree) => {
             let tree_json = expand_tree_to_json(&tree);
-            (
+            json_response(
                 StatusCode::OK,
-                Json(serde_json::to_value(ExpandPermissionResponse { tree: tree_json }).unwrap()),
+                &ExpandPermissionResponse { tree: tree_json },
             )
         }
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -201,6 +228,14 @@ where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
+    if let Err(e) = validate_identifier("resource_type", &req.resource_type)
+        .and_then(|()| validate_identifier("permission", &req.permission))
+        .and_then(|()| validate_identifier("subject_type", &req.subject_type))
+        .and_then(|()| validate_identifier("subject_id", &req.subject_id))
+    {
+        return e;
+    }
+
     let input = LookupResourcesInput {
         resource_type: req.resource_type,
         permission: req.permission,
@@ -218,14 +253,11 @@ where
         .lookup_resources(&state.tenant_id, input)
         .await
     {
-        Ok(ids) => (
+        Ok(ids) => json_response(
             StatusCode::OK,
-            Json(serde_json::to_value(LookupResourcesResponse { resource_ids: ids }).unwrap()),
+            &LookupResourcesResponse { resource_ids: ids },
         ),
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -237,6 +269,14 @@ where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
+    if let Err(e) = validate_identifier("resource_type", &req.resource_type)
+        .and_then(|()| validate_identifier("resource_id", &req.resource_id))
+        .and_then(|()| validate_identifier("permission", &req.permission))
+        .and_then(|()| validate_identifier("subject_type", &req.subject_type))
+    {
+        return e;
+    }
+
     let input = LookupSubjectsInput {
         object_type: req.resource_type,
         object_id: req.resource_id,
@@ -258,15 +298,9 @@ where
                     subject_relation: s.subject_relation,
                 })
                 .collect();
-            (
-                StatusCode::OK,
-                Json(serde_json::to_value(LookupSubjectsResponse { subjects }).unwrap()),
-            )
+            json_response(StatusCode::OK, &LookupSubjectsResponse { subjects })
         }
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -278,10 +312,26 @@ where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
+    if req.updates.len() > MAX_BATCH_SIZE {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("batch size exceeds maximum of {MAX_BATCH_SIZE}"),
+        );
+    }
+
     let mut writes = Vec::new();
     let mut deletes = Vec::new();
 
     for update in &req.updates {
+        if let Err(e) = validate_identifier("resource_type", &update.resource_type)
+            .and_then(|()| validate_identifier("resource_id", &update.resource_id))
+            .and_then(|()| validate_identifier("relation", &update.relation))
+            .and_then(|()| validate_identifier("subject_type", &update.subject_type))
+            .and_then(|()| validate_identifier("subject_id", &update.subject_id))
+        {
+            return e;
+        }
+
         let object = ObjectRef::new(&update.resource_type, &update.resource_id);
         let subject = match &update.subject_relation {
             Some(rel) => SubjectRef::userset(&update.subject_type, &update.subject_id, rel),
@@ -299,14 +349,9 @@ where
                 subject_relation: None,
             }),
             _ => {
-                return (
+                return error_response(
                     StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::to_value(ErrorResponse {
-                            error: format!("unknown operation: {}", update.operation),
-                        })
-                        .unwrap(),
-                    ),
+                    &format!("unknown operation: {}", update.operation),
                 );
             }
         }
@@ -317,19 +362,13 @@ where
         .write_relationships(&state.tenant_id, &writes, &deletes)
         .await
     {
-        Ok(token) => (
+        Ok(token) => json_response(
             StatusCode::OK,
-            Json(
-                serde_json::to_value(WriteRelationshipsResponse {
-                    written_at: token.value().to_string(),
-                })
-                .unwrap(),
-            ),
+            &WriteRelationshipsResponse {
+                written_at: token.value().to_string(),
+            },
         ),
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -358,9 +397,11 @@ where
         Err(resp) => return resp,
     };
 
+    let limit = Some(req.limit.unwrap_or(DEFAULT_READ_LIMIT));
+
     match state
         .service
-        .read_relationships(&state.tenant_id, &filter, consistency, req.limit)
+        .read_relationships(&state.tenant_id, &filter, consistency, limit)
         .await
     {
         Ok(tuples) => {
@@ -375,15 +416,9 @@ where
                     subject_relation: t.subject.subject_relation.clone(),
                 })
                 .collect();
-            (
-                StatusCode::OK,
-                Json(serde_json::to_value(ReadRelationshipsResponse { relationships }).unwrap()),
-            )
+            json_response(StatusCode::OK, &ReadRelationshipsResponse { relationships })
         }
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -400,19 +435,13 @@ where
         .write_schema(&state.tenant_id, &req.schema, req.force)
         .await
     {
-        Ok(result) => (
+        Ok(result) => json_response(
             StatusCode::OK,
-            Json(
-                serde_json::to_value(WriteSchemaResponse {
-                    breaking_changes_overridden: result.breaking_changes_overridden,
-                })
-                .unwrap(),
-            ),
+            &WriteSchemaResponse {
+                breaking_changes_overridden: result.breaking_changes_overridden,
+            },
         ),
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Err(e) => api_error_to_response(e),
     }
 }
 
@@ -422,31 +451,14 @@ where
     F::Store: RelationshipStore + SchemaStore,
 {
     match state.service.read_schema(&state.tenant_id).await {
-        Ok(Some(schema)) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(ReadSchemaResponse { schema }).unwrap()),
-        ),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::to_value(ErrorResponse {
-                    error: "no schema has been written".to_string(),
-                })
-                .unwrap(),
-            ),
-        ),
-        Err(e) => {
-            let (status, Json(body)) = api_error_to_response(e);
-            (status, Json(serde_json::to_value(body).unwrap()))
-        }
+        Ok(Some(schema)) => json_response(StatusCode::OK, &ReadSchemaResponse { schema }),
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "no schema has been written"),
+        Err(e) => api_error_to_response(e),
     }
 }
 
 pub async fn watch() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"error": "watch is not yet implemented"})),
-    )
+    error_response(StatusCode::NOT_IMPLEMENTED, "watch is not yet implemented")
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -742,5 +754,52 @@ mod tests {
         server.get("/v1/schema").await;
         assert_eq!(metrics.request_total(), 2);
         assert_eq!(metrics.request_error(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_resource_type() {
+        let server = make_test_server();
+
+        let response = server
+            .post("/v1/permissions/check")
+            .json(&json!({
+                "resource_type": "",
+                "resource_id": "readme",
+                "permission": "can_view",
+                "subject_type": "user",
+                "subject_id": "alice"
+            }))
+            .await;
+
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json();
+        assert!(body["error"].as_str().unwrap().contains("resource_type"));
+    }
+
+    #[tokio::test]
+    async fn rejects_batch_exceeding_limit() {
+        let server = make_test_server();
+
+        let updates: Vec<serde_json::Value> = (0..1001)
+            .map(|i| {
+                json!({
+                    "operation": "touch",
+                    "resource_type": "document",
+                    "resource_id": format!("doc{i}"),
+                    "relation": "viewer",
+                    "subject_type": "user",
+                    "subject_id": "alice"
+                })
+            })
+            .collect();
+
+        let response = server
+            .post("/v1/relationships/write")
+            .json(&json!({"updates": updates}))
+            .await;
+
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json();
+        assert!(body["error"].as_str().unwrap().contains("batch size"));
     }
 }

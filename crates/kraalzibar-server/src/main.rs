@@ -70,18 +70,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_addr = config.grpc_addr().parse()?;
     let rest_addr: std::net::SocketAddr = config.rest_addr().parse()?;
 
+    const MAX_GRPC_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB
+
     let permission_svc = PermissionServiceServer::new(PermissionServiceImpl::new(
         Arc::clone(&service),
         tenant_id.clone(),
-    ));
+    ))
+    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
     let relationship_svc = RelationshipServiceServer::new(RelationshipServiceImpl::new(
         Arc::clone(&service),
         tenant_id.clone(),
-    ));
+    ))
+    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
     let schema_svc = SchemaServiceServer::new(SchemaServiceImpl::new(
         Arc::clone(&service),
         tenant_id.clone(),
-    ));
+    ))
+    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
 
     // REST server with metrics endpoint
     let rest_state = rest::AppState {
@@ -132,12 +137,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn shutdown_signal(shutdown_tx: tokio::sync::watch::Sender<()>) {
     let ctrl_c = tokio::signal::ctrl_c();
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("failed to register SIGTERM handler");
 
-    tokio::select! {
-        _ = ctrl_c => { tracing::info!("received SIGINT"); }
-        _ = sigterm.recv() => { tracing::info!("received SIGTERM"); }
+    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut sigterm) => {
+            tokio::select! {
+                _ = ctrl_c => { tracing::info!("received SIGINT"); }
+                _ = sigterm.recv() => { tracing::info!("received SIGTERM"); }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to register SIGTERM handler, using SIGINT only");
+            let _ = ctrl_c.await;
+            tracing::info!("received SIGINT");
+        }
     }
 
     let _ = shutdown_tx.send(());

@@ -4,12 +4,14 @@ mod types;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::middleware;
 use axum::response::Response;
 use axum::routing::{get, post};
 use kraalzibar_core::tuple::TenantId;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
+
+const MAX_REQUEST_BODY_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
 use crate::metrics::Metrics;
 use crate::service::AuthzService;
@@ -67,6 +69,7 @@ where
         .route("/v1/schema", get(handlers::read_schema))
         .route("/v1/watch", get(handlers::watch))
         .route("/healthz", get(handlers::healthz))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_SIZE))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             metrics_middleware,

@@ -23,7 +23,8 @@ fn api_error_to_status(err: crate::error::ApiError) -> Status {
             Status::resource_exhausted(err.to_string())
         }
         ApiError::Check(CheckError::StorageError(_)) | ApiError::Storage(_) => {
-            Status::internal(err.to_string())
+            tracing::error!(error = %err, "internal storage error");
+            Status::internal("internal server error")
         }
         ApiError::Parse(_) | ApiError::Validation(_) => Status::invalid_argument(err.to_string()),
         ApiError::BreakingChanges(_) => Status::failed_precondition(err.to_string()),

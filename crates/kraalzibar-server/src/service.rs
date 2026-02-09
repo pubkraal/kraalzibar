@@ -229,6 +229,11 @@ where
 
         let mut subjects = Vec::new();
         collect_subjects(&tree, &input.subject_type, &mut subjects);
+        subjects.sort_by(|a, b| {
+            a.subject_type
+                .cmp(&b.subject_type)
+                .then(a.subject_id.cmp(&b.subject_id))
+        });
         subjects.dedup();
         Ok(subjects)
     }

@@ -92,9 +92,9 @@ where
         let consistency = conversions::proto_consistency_to_domain(req.consistency.as_ref())?;
 
         let limit = if req.optional_limit > 0 {
-            Some(req.optional_limit as usize)
+            Some((req.optional_limit as usize).min(10_000))
         } else {
-            None
+            Some(1000)
         };
 
         let tuples = self
