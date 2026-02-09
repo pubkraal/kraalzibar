@@ -102,26 +102,33 @@ impl RelationshipStore for InMemoryStore {
             }
         }
 
-        state.current_tx += 1;
-        let tx_id = state.current_tx;
-
-        for filter in deletes {
-            for tuple in &mut state.tuples {
-                if tuple.is_active() && tuple.matches_filter(filter) {
-                    tuple.deleted_tx_id = tx_id;
-                }
-            }
-        }
+        let to_delete: Vec<usize> = state
+            .tuples
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.is_active() && deletes.iter().any(|f| t.matches_filter(f)))
+            .map(|(i, _)| i)
+            .collect();
 
         for w in writes {
             let active_dup = state
                 .tuples
                 .iter()
-                .any(|t| t.is_active() && t.matches_write(w));
+                .enumerate()
+                .any(|(i, t)| t.is_active() && !to_delete.contains(&i) && t.matches_write(w));
             if active_dup {
                 return Err(StorageError::DuplicateTuple);
             }
+        }
 
+        state.current_tx += 1;
+        let tx_id = state.current_tx;
+
+        for &i in &to_delete {
+            state.tuples[i].deleted_tx_id = tx_id;
+        }
+
+        for w in writes {
             state.tuples.push(StoredTuple {
                 object_type: w.object.object_type.clone(),
                 object_id: w.object.object_id.clone(),
@@ -641,6 +648,56 @@ mod tests {
     }
 
     // 21. write_schema overwrites previous
+    #[tokio::test]
+    async fn failed_write_does_not_increment_snapshot() {
+        let store = InMemoryStore::new();
+        store
+            .write(&[make_write("doc", "1", "viewer", direct_user("a"))], &[])
+            .await
+            .unwrap();
+
+        let snap_before = store.snapshot().await.unwrap();
+
+        let result = store
+            .write(&[make_write("doc", "1", "viewer", direct_user("a"))], &[])
+            .await;
+        assert!(result.is_err());
+
+        let snap_after = store.snapshot().await.unwrap();
+        assert_eq!(snap_before, snap_after);
+    }
+
+    #[tokio::test]
+    async fn failed_write_does_not_partially_apply_deletes() {
+        let store = InMemoryStore::new();
+        store
+            .write(
+                &[
+                    make_write("doc", "1", "viewer", direct_user("a")),
+                    make_write("doc", "2", "viewer", direct_user("b")),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            object_id: Some("1".to_string()),
+            ..Default::default()
+        };
+        let result = store
+            .write(
+                &[make_write("doc", "2", "viewer", direct_user("b"))],
+                &[delete_filter],
+            )
+            .await;
+        assert!(result.is_err());
+
+        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
     #[tokio::test]
     async fn write_schema_overwrites_previous() {
         let store = InMemoryStore::new();

@@ -1,5 +1,3 @@
-use sqlx::PgPool;
-
 use kraalzibar_core::tuple::{ObjectRef, SubjectRef, Tuple, TupleFilter, TupleWrite};
 
 use crate::traits::StorageError;
@@ -10,28 +8,34 @@ fn to_storage_error(e: sqlx::Error) -> StorageError {
     StorageError::Internal(e.to_string())
 }
 
-pub async fn next_tx_id(pool: &PgPool, schema: &str) -> Result<i64, StorageError> {
+pub async fn next_tx_id<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    schema: &str,
+) -> Result<i64, StorageError> {
     let query = format!("SELECT nextval('{schema}.tx_id_seq')");
     let row: (i64,) = sqlx::query_as(&query)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .map_err(to_storage_error)?;
     Ok(row.0)
 }
 
-pub async fn current_tx_id(pool: &PgPool, schema: &str) -> Result<i64, StorageError> {
+pub async fn current_tx_id<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    schema: &str,
+) -> Result<i64, StorageError> {
     let query = format!(
         "SELECT COALESCE((SELECT last_value FROM {schema}.tx_id_seq WHERE is_called = true), 0)"
     );
     let row: (i64,) = sqlx::query_as(&query)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .map_err(to_storage_error)?;
     Ok(row.0)
 }
 
-pub async fn insert_tuple(
-    pool: &PgPool,
+pub async fn insert_tuple<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     schema: &str,
     write: &TupleWrite,
     tx_id: i64,
@@ -52,7 +56,7 @@ pub async fn insert_tuple(
         .bind(&write.subject.subject_relation)
         .bind(tx_id)
         .bind(ACTIVE_TX_ID)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|e| {
             if let sqlx::Error::Database(ref db_err) = e
@@ -65,8 +69,8 @@ pub async fn insert_tuple(
     Ok(())
 }
 
-pub async fn delete_matching_tuples(
-    pool: &PgPool,
+pub async fn delete_matching_tuples<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     schema: &str,
     filter: &TupleFilter,
     tx_id: i64,
@@ -122,12 +126,12 @@ pub async fn delete_matching_tuples(
     for bind in &binds {
         q = q.bind(*bind);
     }
-    q.execute(pool).await.map_err(to_storage_error)?;
+    q.execute(executor).await.map_err(to_storage_error)?;
     Ok(())
 }
 
-pub async fn read_tuples(
-    pool: &PgPool,
+pub async fn read_tuples<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     schema: &str,
     filter: &TupleFilter,
     snapshot: i64,
@@ -191,7 +195,7 @@ pub async fn read_tuples(
         q = q.bind(*bind);
     }
 
-    let rows = q.fetch_all(pool).await.map_err(to_storage_error)?;
+    let rows = q.fetch_all(executor).await.map_err(to_storage_error)?;
 
     let tuples = rows
         .into_iter()
@@ -209,8 +213,8 @@ pub async fn read_tuples(
     Ok(tuples)
 }
 
-pub async fn write_schema_definition(
-    pool: &PgPool,
+pub async fn write_schema_definition<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     schema: &str,
     definition: &str,
 ) -> Result<(), StorageError> {
@@ -222,14 +226,14 @@ pub async fn write_schema_definition(
     );
     sqlx::query(&query)
         .bind(definition)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(to_storage_error)?;
     Ok(())
 }
 
-pub async fn read_latest_schema(
-    pool: &PgPool,
+pub async fn read_latest_schema<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     schema: &str,
 ) -> Result<Option<String>, StorageError> {
     let query = format!(
@@ -240,7 +244,7 @@ pub async fn read_latest_schema(
         "#
     );
     let row: Option<(String,)> = sqlx::query_as(&query)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .map_err(to_storage_error)?;
     Ok(row.map(|(d,)| d))

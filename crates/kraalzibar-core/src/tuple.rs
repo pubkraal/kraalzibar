@@ -87,7 +87,7 @@ impl fmt::Display for SubjectRef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Tuple {
     pub object: ObjectRef,
     pub relation: String,
@@ -123,6 +123,16 @@ impl TupleWrite {
             object,
             relation: relation.into(),
             subject,
+        }
+    }
+}
+
+impl From<TupleWrite> for Tuple {
+    fn from(write: TupleWrite) -> Self {
+        Self {
+            object: write.object,
+            relation: write.relation,
+            subject: write.subject,
         }
     }
 }
@@ -319,6 +329,43 @@ mod tests {
         assert_eq!(write.object, ObjectRef::new("object", "readme"));
         assert_eq!(write.relation, "viewer");
         assert_eq!(write.subject, SubjectRef::direct("user", "john"));
+    }
+
+    // --- From<TupleWrite> for Tuple ---
+
+    #[test]
+    fn tuple_from_tuple_write() {
+        let write = TupleWrite::new(
+            ObjectRef::new("doc", "readme"),
+            "viewer",
+            SubjectRef::direct("user", "john"),
+        );
+
+        let tuple: Tuple = write.into();
+
+        assert_eq!(tuple.object, ObjectRef::new("doc", "readme"));
+        assert_eq!(tuple.relation, "viewer");
+        assert_eq!(tuple.subject, SubjectRef::direct("user", "john"));
+    }
+
+    #[test]
+    fn tuple_hash_consistent_with_equality() {
+        use std::collections::HashSet;
+
+        let a = Tuple::new(
+            ObjectRef::new("doc", "readme"),
+            "viewer",
+            SubjectRef::direct("user", "john"),
+        );
+        let b = Tuple::new(
+            ObjectRef::new("doc", "readme"),
+            "viewer",
+            SubjectRef::direct("user", "john"),
+        );
+
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
     }
 
     // --- TupleFilter ---

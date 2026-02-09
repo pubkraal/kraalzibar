@@ -1,5 +1,17 @@
 use sqlx::PgPool;
 
+fn validate_schema_name(name: &str) -> Result<(), sqlx::Error> {
+    let is_valid = name.starts_with("tenant_")
+        && name.len() == 39
+        && name[7..].chars().all(|c| c.is_ascii_hexdigit());
+    if !is_valid {
+        return Err(sqlx::Error::Protocol(format!(
+            "invalid tenant schema name: {name}"
+        )));
+    }
+    Ok(())
+}
+
 pub async fn run_shared_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
@@ -32,6 +44,7 @@ pub async fn run_shared_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<(), sqlx::Error> {
+    validate_schema_name(schema_name)?;
     let create_schema = format!("CREATE SCHEMA IF NOT EXISTS {schema_name}");
     sqlx::query(&create_schema).execute(pool).await?;
 
@@ -47,7 +60,7 @@ pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<()
             subject_relation TEXT,
             created_tx_id   BIGINT NOT NULL,
             deleted_tx_id   BIGINT NOT NULL DEFAULT 9223372036854775807,
-            UNIQUE(object_type, object_id, relation, subject_type, subject_id,
+            UNIQUE NULLS NOT DISTINCT (object_type, object_id, relation, subject_type, subject_id,
                    subject_relation, deleted_tx_id)
         )
         "#
@@ -87,4 +100,45 @@ pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<()
     sqlx::query(&create_seq).execute(pool).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_schema_name_accepted() {
+        let name = "tenant_00000000000000000000000000000000";
+        assert!(validate_schema_name(name).is_ok());
+    }
+
+    #[test]
+    fn valid_hex_schema_name_accepted() {
+        let name = "tenant_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+        assert!(validate_schema_name(name).is_ok());
+    }
+
+    #[test]
+    fn rejects_sql_injection_attempt() {
+        let name = "tenant_; DROP TABLE users; --";
+        assert!(validate_schema_name(name).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_prefix() {
+        let name = "schema_00000000000000000000000000000000";
+        assert!(validate_schema_name(name).is_err());
+    }
+
+    #[test]
+    fn rejects_too_short() {
+        let name = "tenant_abc";
+        assert!(validate_schema_name(name).is_err());
+    }
+
+    #[test]
+    fn rejects_non_hex_chars() {
+        let name = "tenant_0000000000000000000000000000000g";
+        assert!(validate_schema_name(name).is_err());
+    }
 }

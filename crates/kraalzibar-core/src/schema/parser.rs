@@ -15,6 +15,8 @@ pub enum ParseError {
     Syntax(String),
     #[error("mixed operators in permission expression: use only one of +, &, - per expression")]
     MixedOperators,
+    #[error("exclusion (-) supports exactly two operands: base - excluded")]
+    MultipleExclusions,
     #[error("duplicate type: {0}")]
     DuplicateType(String),
     #[error("duplicate relation '{relation}' in type '{type_name}'")]
@@ -51,10 +53,24 @@ pub fn parse_schema(input: &str) -> Result<Schema, ParseError> {
     Ok(Schema { types })
 }
 
+fn unexpected_rule(rule: Rule) -> ParseError {
+    ParseError::Syntax(format!("unexpected rule: {rule:?}"))
+}
+
+fn missing_token(context: &str) -> ParseError {
+    ParseError::Syntax(format!("missing token: {context}"))
+}
+
 fn parse_definition(pair: pest::iterators::Pair<'_, Rule>) -> Result<TypeDefinition, ParseError> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-    let body = inner.next().unwrap();
+    let name = inner
+        .next()
+        .ok_or_else(|| missing_token("definition name"))?
+        .as_str()
+        .to_string();
+    let body = inner
+        .next()
+        .ok_or_else(|| missing_token("definition body"))?;
 
     let mut relations = Vec::new();
     let mut permissions = Vec::new();
@@ -64,7 +80,7 @@ fn parse_definition(pair: pest::iterators::Pair<'_, Rule>) -> Result<TypeDefinit
     for item in body.into_inner() {
         match item.as_rule() {
             Rule::relation_def => {
-                let rel = parse_relation_def(item);
+                let rel = parse_relation_def(item)?;
                 if !seen_relations.insert(rel.name.clone()) {
                     return Err(ParseError::DuplicateRelation {
                         type_name: name,
@@ -94,39 +110,57 @@ fn parse_definition(pair: pest::iterators::Pair<'_, Rule>) -> Result<TypeDefinit
     })
 }
 
-fn parse_relation_def(pair: pest::iterators::Pair<'_, Rule>) -> RelationDef {
+fn parse_relation_def(pair: pest::iterators::Pair<'_, Rule>) -> Result<RelationDef, ParseError> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-    let subject_type_list = inner.next().unwrap();
+    let name = inner
+        .next()
+        .ok_or_else(|| missing_token("relation name"))?
+        .as_str()
+        .to_string();
+    let subject_type_list = inner
+        .next()
+        .ok_or_else(|| missing_token("subject type list"))?;
 
     let subject_types = subject_type_list
         .into_inner()
         .map(parse_subject_type_ref)
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
-    RelationDef {
+    Ok(RelationDef {
         name,
         subject_types,
-    }
+    })
 }
 
-fn parse_subject_type_ref(pair: pest::iterators::Pair<'_, Rule>) -> SubjectTypeRef {
+fn parse_subject_type_ref(
+    pair: pest::iterators::Pair<'_, Rule>,
+) -> Result<SubjectTypeRef, ParseError> {
     let mut inner = pair.into_inner();
-    let type_name = inner.next().unwrap().as_str().to_string();
+    let type_name = inner
+        .next()
+        .ok_or_else(|| missing_token("subject type name"))?
+        .as_str()
+        .to_string();
     let relation = inner.next().map(|p| p.as_str().to_string());
 
-    SubjectTypeRef {
+    Ok(SubjectTypeRef {
         type_name,
         relation,
-    }
+    })
 }
 
 fn parse_permission_def(
     pair: pest::iterators::Pair<'_, Rule>,
 ) -> Result<PermissionDef, ParseError> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-    let expr = inner.next().unwrap();
+    let name = inner
+        .next()
+        .ok_or_else(|| missing_token("permission name"))?
+        .as_str()
+        .to_string();
+    let expr = inner
+        .next()
+        .ok_or_else(|| missing_token("permission expression"))?;
     let rule = parse_permission_expr(expr)?;
 
     Ok(PermissionDef { name, rule })
@@ -134,12 +168,20 @@ fn parse_permission_def(
 
 fn parse_permission_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<RewriteRule, ParseError> {
     let mut inner = pair.into_inner();
-    let first = parse_permission_term(inner.next().unwrap());
+    let first = parse_permission_term(
+        inner
+            .next()
+            .ok_or_else(|| missing_token("permission term"))?,
+    )?;
 
     let mut ops_and_terms: Vec<(Rule, RewriteRule)> = Vec::new();
 
     while let Some(op) = inner.next() {
-        let term = parse_permission_term(inner.next().unwrap());
+        let term = parse_permission_term(
+            inner
+                .next()
+                .ok_or_else(|| missing_token("permission term after operator"))?,
+        )?;
         ops_and_terms.push((op.as_rule(), term));
     }
 
@@ -167,26 +209,40 @@ fn parse_permission_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Rewrit
         }
         Rule::exclusion_op => {
             if ops_and_terms.len() != 1 {
-                return Err(ParseError::MixedOperators);
+                return Err(ParseError::MultipleExclusions);
             }
-            let (_, subtract) = ops_and_terms.into_iter().next().unwrap();
+            let (_, subtract) = ops_and_terms
+                .into_iter()
+                .next()
+                .ok_or_else(|| missing_token("exclusion operand"))?;
             Ok(RewriteRule::Exclusion(Box::new(first), Box::new(subtract)))
         }
-        _ => unreachable!(),
+        _ => Err(unexpected_rule(first_op)),
     }
 }
 
-fn parse_permission_term(pair: pest::iterators::Pair<'_, Rule>) -> RewriteRule {
-    let inner = pair.into_inner().next().unwrap();
+fn parse_permission_term(pair: pest::iterators::Pair<'_, Rule>) -> Result<RewriteRule, ParseError> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| missing_token("permission term content"))?;
     match inner.as_rule() {
         Rule::arrow_expr => {
             let mut parts = inner.into_inner();
-            let tupleset = parts.next().unwrap().as_str().to_string();
-            let computed = parts.next().unwrap().as_str().to_string();
-            RewriteRule::Arrow(tupleset, computed)
+            let tupleset = parts
+                .next()
+                .ok_or_else(|| missing_token("arrow tupleset"))?
+                .as_str()
+                .to_string();
+            let computed = parts
+                .next()
+                .ok_or_else(|| missing_token("arrow computed"))?
+                .as_str()
+                .to_string();
+            Ok(RewriteRule::Arrow(tupleset, computed))
         }
-        Rule::identifier => RewriteRule::This(inner.as_str().to_string()),
-        _ => unreachable!(),
+        Rule::identifier => Ok(RewriteRule::This(inner.as_str().to_string())),
+        other => Err(unexpected_rule(other)),
     }
 }
 
@@ -428,6 +484,14 @@ mod tests {
             }
             other => panic!("expected Syntax error, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn reject_multiple_exclusion_operators() {
+        let input = "definition doc { relation a: user relation b: user relation c: user permission p = a - b - c }";
+        let result = parse_schema(input);
+
+        assert_eq!(result.unwrap_err(), ParseError::MultipleExclusions);
     }
 
     #[test]
