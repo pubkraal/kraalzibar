@@ -16,8 +16,8 @@ The server is written in Rust for performance and safety.
 The system models authorization as a graph of relationships between objects and
 subjects:
 
-- **Tuple**: `object#relation@subject` (e.g., `document:readme#viewer@user:john`)
-- **Namespace/Type**: a category of object (e.g., `document`, `folder`, `user`)
+- **Tuple**: `object#relation@subject` (e.g., `object:readme#viewer@user:john`)
+- **Namespace/Type**: a category of object (e.g., `object`, `category`, `user`)
 - **Relation**: a named edge type within a namespace (e.g., `viewer`, `editor`, `owner`)
 - **Permission**: a computed relation derived from unions, intersections, exclusions, and
   indirection (arrow/tuple-to-userset)
@@ -47,6 +47,103 @@ subjects:
 
 ---
 
+## Requirements
+
+### Multi-Tenancy
+
+- **Isolation model**: Separate PostgreSQL schema per tenant. Each tenant gets
+  its own set of tables (`relation_tuples`, `schema_versions`, etc.) within a
+  dedicated PG schema namespace (e.g., `tenant_<uuid>`).
+- **Tenant definition**: A tenant is a workspace with its own authorization
+  schema (DSL), relationship tuples, and users/assets. Flat hierarchy — no
+  sub-tenants.
+- **Cross-tenant access**: Not supported. A single API request is always scoped
+  to exactly one tenant, determined by the API key.
+- **Tenant registry**: Stored in a shared `public` PG schema (tenant metadata,
+  API key hashes).
+- **Scale target**: Dozens of tenants, hundreds of users per tenant, thousands
+  of assets per tenant.
+
+### Authorization Schema Lifecycle
+
+- **Atomic changes**: Schema updates are all-or-nothing. A `WriteSchema` call
+  either fully applies the new schema or fails entirely.
+- **Breaking change warnings (two-step flow)**: The system detects breaking
+  changes (removed types or relations that have existing tuples, changed
+  subject type constraints) and returns them as warnings. By default, a
+  `WriteSchema` call with breaking changes is **rejected**. The caller must
+  explicitly pass `force: true` to apply a schema with breaking changes. This
+  enables a dry-run workflow: call `WriteSchema` without `force`, inspect
+  warnings, then call again with `force: true` if acceptable.
+- **Breaking change definitions**:
+  - Removing a type that has existing tuples → breaking
+  - Removing a relation that has existing tuples → breaking
+  - Changing allowed subject types for a relation when existing tuples would
+    violate the new constraint → breaking
+  - Renaming a type or relation → breaking (effectively remove + add)
+  - Adding new types, relations, or permissions → safe
+  - Changing a permission's rewrite rule → safe (no stored data affected)
+- **Orphan cleanup**: When a schema change removes types or relations, orphaned
+  tuples are marked for deletion and cleaned up asynchronously by a background
+  garbage collector task.
+- **Version history**: Out of scope for initial implementation.
+
+### Authentication
+
+- **Mechanism**: API key per tenant, passed via `Authorization: Bearer <key>`
+  header.
+- **Key storage**: API keys are stored as hashed values (argon2) in the shared
+  `public` schema. The raw key is returned once on creation and never stored.
+- **Key-to-tenant mapping**: Each API key maps to exactly one tenant. All
+  requests authenticated with that key operate within that tenant's PG schema.
+- **Callers**: Backend services only (service-to-service). No browser or
+  end-user direct access.
+- **Future scope**: OAuth2/OIDC support, tiered permissions (admin vs. normal).
+
+### Consistency Model
+
+- **Snapshot tokens**: Write operations return an opaque snapshot token.
+  Read/check operations accept an optional `at_least_as_fresh` token to ensure
+  they see at least that write.
+- **Default behavior**: Without a token, reads use the latest available snapshot
+  (minimize latency mode).
+- **Guarantee level**: Causal consistency within a tenant. No cross-tenant
+  consistency requirements.
+- **Token scope**: Tokens are per-tenant. A token from tenant A is meaningless
+  in tenant B.
+
+### Security & Observability
+
+- **Deployment model**: Shared multi-tenant deployment.
+- **Isolation severity**: Standard — data leaks between tenants are bugs to
+  fix, not regulatory catastrophes.
+- **Audit logging**: Immutable structured logs to stdout (12-factor app). All
+  schema changes and relationship writes are logged with tenant context. Logs
+  must support filtering by tenant ID, operation type, and timestamp.
+- **Rate limiting**: Handled externally by the load balancer. Not implemented
+  in the service itself.
+
+### Graph Engine Limits
+
+- **Max traversal depth**: Default 6, configurable per deployment. Recommended
+  range: 5–8.
+- **Schema size limits**: Defaults with manually adjustable hard limits:
+  - Max types per schema: 50
+  - Max relations per type: 30
+  - Max permissions per type: 30
+- **Lookup operation limits**: Hard limit on results returned by
+  `LookupResources` and `LookupSubjects` (default: 1000, adjustable).
+- **Concurrent branches**: Max concurrent graph branches per check request
+  (default: 10).
+
+### Operations (Initial Scope)
+
+- **Tenant onboarding**: Out of scope for the service API. Handled by a
+  separate admin binary or manual process.
+- **Tenant suspension/deletion**: Manual intervention only.
+
+---
+
 ## Phase 1: Core Data Model & Storage
 
 **Goal**: Define the tuple data model, schema types, and storage layer.
@@ -56,7 +153,7 @@ subjects:
 Define the core relationship tuple struct:
 
 ```
-object_type:  String    (namespace, e.g. "document")
+object_type:  String    (namespace, e.g. "object")
 object_id:    String    (e.g. "readme")
 relation:     String    (e.g. "viewer")
 subject_type: String    (e.g. "user")
@@ -76,7 +173,7 @@ definition group {
     relation member: user | group#member
 }
 
-definition folder {
+definition category {
     relation owner: user
     relation editor: user | group#member
     relation viewer: user | group#member
@@ -85,8 +182,8 @@ definition folder {
     permission can_view = can_edit + viewer
 }
 
-definition document {
-    relation parent: folder
+definition object {
+    relation parent: category
     relation owner: user
     relation editor: user | group#member
     relation viewer: user | group#member
@@ -102,12 +199,62 @@ Operators:
 - `-` exclusion (BUT NOT)
 - `->` arrow / tuple-to-userset (follow relation, then evaluate)
 
+#### Schema Write Flow
+
+When a tenant calls `WriteSchema`:
+
+1. Parse the new DSL definition
+2. Validate against schema size limits (max types, relations, permissions)
+3. Compare against the current schema to detect breaking changes:
+   - Removed types with existing tuples
+   - Removed relations with existing tuples
+   - Changed subject type constraints that invalidate existing tuples
+4. If breaking changes detected and `force` is not set → reject with warnings
+5. If no breaking changes, or `force: true` → apply atomically (single tx)
+6. Return response (with warnings if `force` was used)
+7. Enqueue orphaned tuple cleanup for the background GC task
+
+The GC task runs periodically and marks orphaned tuples (those referencing
+types or relations no longer in the schema) with `deleted_tx_id` set to the
+current transaction ID.
+
 ### 1.3 Storage Backend
 
 Start with PostgreSQL. Abstract behind a trait so other backends can be added.
 
+The database uses two layers:
+- **Shared schema** (`public`): tenant registry and API key storage
+- **Per-tenant schemas** (`tenant_<uuid>`): relationship tuples and schema
+  definitions, fully isolated per tenant
+
+#### Shared Schema (public)
+
 ```sql
-CREATE TABLE relation_tuples (
+CREATE TABLE tenants (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL UNIQUE,
+    pg_schema   TEXT NOT NULL UNIQUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE api_keys (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES tenants(id),
+    key_hash    TEXT NOT NULL UNIQUE,  -- argon2 hash
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at  TIMESTAMPTZ
+);
+```
+
+#### Per-Tenant Schema (tenant_<uuid>)
+
+Created dynamically when a tenant is provisioned. Each tenant gets an identical
+set of tables in their own PG schema namespace:
+
+```sql
+CREATE SCHEMA tenant_<uuid>;
+
+CREATE TABLE tenant_<uuid>.relation_tuples (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     object_type     TEXT NOT NULL,
     object_id       TEXT NOT NULL,
@@ -117,36 +264,49 @@ CREATE TABLE relation_tuples (
     subject_relation TEXT,
     created_tx_id   BIGINT NOT NULL,
     deleted_tx_id   BIGINT NOT NULL DEFAULT 9223372036854775807,
-    UNIQUE(object_type, object_id, relation, subject_type, subject_id, subject_relation, deleted_tx_id)
+    UNIQUE(object_type, object_id, relation, subject_type, subject_id,
+           subject_relation, deleted_tx_id)
 );
 
-CREATE INDEX idx_tuples_lookup ON relation_tuples
+CREATE INDEX idx_tuples_lookup ON tenant_<uuid>.relation_tuples
     (object_type, object_id, relation, deleted_tx_id);
 
-CREATE INDEX idx_tuples_reverse ON relation_tuples
+CREATE INDEX idx_tuples_reverse ON tenant_<uuid>.relation_tuples
     (subject_type, subject_id, subject_relation, deleted_tx_id);
 
-CREATE TABLE schema_versions (
+CREATE TABLE tenant_<uuid>.schema_definitions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     definition  TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE SEQUENCE global_tx_id;
+CREATE SEQUENCE tenant_<uuid>.tx_id_seq;
 ```
 
 The `deleted_tx_id` column enables MVCC-style snapshot reads:
 - Active tuples have `deleted_tx_id = MAX_BIGINT`
 - Deleted tuples get `deleted_tx_id = <tx_id of deletion>`
-- Reads at a given snapshot filter: `created_tx_id <= snapshot AND deleted_tx_id > snapshot`
+- Reads at a given snapshot filter:
+  `created_tx_id <= snapshot AND deleted_tx_id > snapshot`
+
+Each tenant has its own `tx_id_seq` sequence — snapshot tokens are scoped to a
+tenant and carry no cross-tenant meaning.
 
 ### 1.4 Storage Trait
 
+The store trait is tenant-unaware. A tenant-scoped store instance is created
+per request via a factory, which sets the PG `search_path` to the tenant's
+schema:
+
 ```rust
 trait RelationshipStore {
-    async fn write(writes: Vec<TupleWrite>, deletes: Vec<TupleFilter>) -> Result<SnapshotToken>;
-    async fn read(filter: TupleFilter, snapshot: Option<SnapshotToken>) -> Result<Vec<Tuple>>;
-    async fn snapshot() -> Result<SnapshotToken>;
+    async fn write(&self, writes: Vec<TupleWrite>, deletes: Vec<TupleFilter>) -> Result<SnapshotToken>;
+    async fn read(&self, filter: TupleFilter, snapshot: Option<SnapshotToken>) -> Result<Vec<Tuple>>;
+    async fn snapshot(&self) -> Result<SnapshotToken>;
+}
+
+trait StoreFactory {
+    fn for_tenant(&self, tenant_id: &TenantId) -> impl RelationshipStore;
 }
 ```
 
@@ -155,10 +315,13 @@ trait RelationshipStore {
 - [ ] `Tuple` and related domain types
 - [ ] Schema DSL parser (using `nom` or `pest`)
 - [ ] In-memory schema representation (types, relations, permissions with rewrite rules)
-- [ ] PostgreSQL storage implementation
+- [ ] Schema validation (size limits, breaking change detection)
+- [ ] PostgreSQL storage implementation (shared + per-tenant schemas)
+- [ ] `StoreFactory` for tenant-scoped store creation
 - [ ] In-memory storage implementation (for tests)
 - [ ] Snapshot token (consistency token) generation and validation
-- [ ] Database migrations
+- [ ] Background GC task for orphaned tuple cleanup
+- [ ] Database migrations (shared schema + per-tenant template)
 
 ---
 
@@ -191,7 +354,7 @@ Given `Check(object_type, object_id, permission, subject_type, subject_id)`:
   of a union) concurrently using `tokio::spawn` / `tokio::select!`
 - **Cycle detection**: track visited `(object, relation)` pairs per check to
   prevent infinite loops from circular group memberships
-- **Depth limiting**: configurable max recursion depth (default: 25)
+- **Depth limiting**: configurable max recursion depth (default: 6)
 - **Request-level memoization**: cache intermediate results within a single
   check request to avoid redundant sub-checks
 
@@ -312,9 +475,23 @@ structured query parameters that don't map well to query strings.
 
 ### 3.4 Authentication & Multi-tenancy
 
-- API key authentication via header (`Authorization: Bearer <key>`)
-- Optional: pre-shared key for initial simplicity, with JWT/OIDC as a future extension
-- Multi-tenancy: each API key is scoped to a "store" (isolated namespace + tuple space)
+- API key authentication via `Authorization: Bearer <key>` header
+- Key is looked up in the shared `public.api_keys` table (hashed with argon2)
+- On successful auth, the middleware resolves the tenant and sets the PG
+  `search_path` to the tenant's schema for the duration of the request
+- All subsequent storage operations are automatically scoped to that tenant
+- Future: OAuth2/OIDC token validation, tiered permissions
+
+#### Request Flow
+
+```
+1. Request arrives with Authorization header
+2. Middleware hashes the key, looks up in public.api_keys
+3. If valid and not revoked → resolve tenant_id → resolve pg_schema
+4. Set search_path to tenant's PG schema
+5. Proceed to handler (all storage ops are now tenant-scoped)
+6. On error/invalid key → 401 Unauthorized
+```
 
 ### Deliverables - Phase 3
 
@@ -324,9 +501,11 @@ structured query parameters that don't map well to query strings.
 - [ ] Request validation and error handling
 - [ ] Consistency parameter handling
 - [ ] Streaming responses for Read, LookupResources, LookupSubjects, Watch
-- [ ] API key authentication middleware
+- [ ] API key authentication middleware (argon2 hash lookup, tenant resolution)
+- [ ] Tenant-scoped request pipeline (API key → tenant → PG schema)
+- [ ] Structured audit logging (schema writes, relationship writes, auth events)
 - [ ] Server configuration (env vars + TOML)
-- [ ] Structured logging and Prometheus metrics
+- [ ] Prometheus metrics (per-RPC, per-tenant)
 - [ ] Health check endpoints
 - [ ] Docker image / Dockerfile
 
@@ -354,7 +533,7 @@ Use `deadpool-postgres` or `sqlx` connection pool with configurable size.
 
 - Criterion benchmarks for the graph engine
 - Load tests with realistic tuple graphs (e.g., 1M tuples, hierarchical
-  folder structure)
+  category hierarchy)
 - Target: < 5ms p99 for Check on a warm cache with moderate graph depth
 
 ### Deliverables - Phase 4
@@ -492,9 +671,16 @@ server. This ensures behavioral parity across SDKs.
 
 ### 6.2 Observability
 
-- **Logging**: structured JSON logs via `tracing` + `tracing-subscriber`
+- **Logging**: structured JSON logs to stdout via `tracing` + `tracing-subscriber`
+  (12-factor app). All log entries include `tenant_id` where applicable.
+- **Audit logging**: immutable structured log events for:
+  - Schema writes (includes tenant_id, before/after hash, warnings)
+  - Relationship writes (includes tenant_id, operation count, snapshot token)
+  - Authentication events (success/failure, key ID, tenant_id)
+  - Audit logs are written to stdout as structured JSON, filterable by
+    `tenant_id`, `operation`, and `timestamp`
 - **Metrics**: Prometheus endpoint at `/metrics`
-  - Request count, latency histograms (by RPC)
+  - Request count, latency histograms (by RPC, by tenant)
   - Check cache hit/miss rates
   - Storage query latency
   - Active connections
@@ -517,12 +703,13 @@ pool_size = 20
 check_cache_size = 10000
 schema_cache_ttl = "5m"
 
-[auth]
-api_keys = ["key1", "key2"]
-
 [engine]
-max_depth = 25
+max_depth = 6
 concurrent_branches = 10
+max_types_per_schema = 50
+max_relations_per_type = 30
+max_permissions_per_type = 30
+lookup_result_limit = 1000
 ```
 
 ### Deliverables - Phase 6
@@ -646,6 +833,14 @@ Phase 3 server while caching is added in parallel.
 These are explicitly out of scope for the initial implementation but worth
 noting for later:
 
+- **Schema version history**: ability to view and roll back to previous schema
+  versions per tenant.
+- **OAuth2/OIDC authentication**: token-based auth alongside API keys.
+- **Permission tiers**: admin vs. normal API key privileges (e.g., only admins
+  can write schemas).
+- **Tenant self-service onboarding**: API for creating/managing tenants
+  (currently manual/admin binary).
+- **Tenant suspension and deletion**: soft delete with retention, crypto-shredding.
 - **Caveats/Conditions**: conditional relationships with runtime context
   (e.g., IP allowlists, time-based access). SpiceDB supports this; consider
   adding after the core is stable.
@@ -655,6 +850,7 @@ noting for later:
 - **Admin UI**: web interface for managing schemas and browsing tuples.
 - **Playground**: interactive tool for testing schemas and permissions (similar
   to the Authzed playground).
-- **Rate limiting**: per-API-key rate limiting.
+- **Rate limiting in-service**: per-API-key rate limiting (currently external
+  via load balancer).
 - **Batched checks**: check multiple permissions in a single request.
 - **RBAC bridge**: convenience layer mapping traditional roles to ReBAC tuples.
