@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: kraalzibar
       POSTGRES_USER: kraalzibar
-      POSTGRES_PASSWORD: kraalzibar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kraalzibar}
     ports:
       - "5432:5432"
     volumes:

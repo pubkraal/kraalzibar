@@ -67,6 +67,24 @@ pub struct LookupResourcesInput {
 }
 
 #[derive(Debug)]
+pub struct ExpandPermissionOutput {
+    pub tree: ExpandTree,
+    pub snapshot: Option<SnapshotToken>,
+}
+
+#[derive(Debug)]
+pub struct LookupResourcesOutput {
+    pub resource_ids: Vec<String>,
+    pub snapshot: Option<SnapshotToken>,
+}
+
+#[derive(Debug)]
+pub struct LookupSubjectsOutput {
+    pub subjects: Vec<SubjectRef>,
+    pub snapshot: Option<SnapshotToken>,
+}
+
+#[derive(Debug)]
 pub struct WriteSchemaOutput {
     pub breaking_changes_overridden: bool,
 }
@@ -201,7 +219,7 @@ where
         &self,
         tenant_id: &TenantId,
         input: ExpandPermissionInput,
-    ) -> Result<ExpandTree, ApiError> {
+    ) -> Result<ExpandPermissionOutput, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
         let store = Arc::new(store);
 
@@ -218,7 +236,8 @@ where
             snapshot,
         };
 
-        Ok(engine.expand(&request).await?)
+        let tree = engine.expand(&request).await?;
+        Ok(ExpandPermissionOutput { tree, snapshot })
     }
 
     pub async fn write_relationships(
@@ -290,8 +309,8 @@ where
         &self,
         tenant_id: &TenantId,
         input: LookupSubjectsInput,
-    ) -> Result<Vec<SubjectRef>, ApiError> {
-        let tree = self
+    ) -> Result<LookupSubjectsOutput, ApiError> {
+        let expand_output = self
             .expand_permission_tree(
                 tenant_id,
                 ExpandPermissionInput {
@@ -304,21 +323,24 @@ where
             .await?;
 
         let mut subjects = Vec::new();
-        collect_subjects(&tree, &input.subject_type, &mut subjects);
+        collect_subjects(&expand_output.tree, &input.subject_type, &mut subjects);
         subjects.sort_by(|a, b| {
             a.subject_type
                 .cmp(&b.subject_type)
                 .then(a.subject_id.cmp(&b.subject_id))
         });
         subjects.dedup();
-        Ok(subjects)
+        Ok(LookupSubjectsOutput {
+            subjects,
+            snapshot: expand_output.snapshot,
+        })
     }
 
     pub async fn lookup_resources(
         &self,
         tenant_id: &TenantId,
         input: LookupResourcesInput,
-    ) -> Result<Vec<String>, ApiError> {
+    ) -> Result<LookupResourcesOutput, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
         let store = Arc::new(store);
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
@@ -362,7 +384,10 @@ where
             }
         }
 
-        Ok(results)
+        Ok(LookupResourcesOutput {
+            resource_ids: results,
+            snapshot,
+        })
     }
 
     async fn load_schema_cached(
@@ -770,7 +795,7 @@ mod tests {
         )
         .await;
 
-        let tree = service
+        let output = service
             .expand_permission_tree(
                 &tenant_id,
                 ExpandPermissionInput {
@@ -783,7 +808,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(matches!(tree, ExpandTree::Union { .. }));
+        assert!(matches!(output.tree, ExpandTree::Union { .. }));
     }
 
     #[tokio::test]
@@ -799,7 +824,7 @@ mod tests {
         )
         .await;
 
-        let subjects = service
+        let output = service
             .lookup_subjects(
                 &tenant_id,
                 LookupSubjectsInput {
@@ -813,7 +838,11 @@ mod tests {
             .await
             .unwrap();
 
-        let ids: Vec<&str> = subjects.iter().map(|s| s.subject_id.as_str()).collect();
+        let ids: Vec<&str> = output
+            .subjects
+            .iter()
+            .map(|s| s.subject_id.as_str())
+            .collect();
         assert!(ids.contains(&"alice"), "should contain alice: {ids:?}");
         assert!(ids.contains(&"bob"), "should contain bob: {ids:?}");
     }
@@ -835,7 +864,7 @@ mod tests {
         )
         .await;
 
-        let resources = service
+        let output = service
             .lookup_resources(
                 &tenant_id,
                 LookupResourcesInput {
@@ -851,16 +880,19 @@ mod tests {
             .unwrap();
 
         assert!(
-            resources.contains(&"readme".to_string()),
-            "should contain readme: {resources:?}"
+            output.resource_ids.contains(&"readme".to_string()),
+            "should contain readme: {:?}",
+            output.resource_ids
         );
         assert!(
-            resources.contains(&"design".to_string()),
-            "should contain design: {resources:?}"
+            output.resource_ids.contains(&"design".to_string()),
+            "should contain design: {:?}",
+            output.resource_ids
         );
         assert!(
-            !resources.contains(&"secret".to_string()),
-            "should not contain secret: {resources:?}"
+            !output.resource_ids.contains(&"secret".to_string()),
+            "should not contain secret: {:?}",
+            output.resource_ids
         );
     }
 
@@ -881,7 +913,7 @@ mod tests {
         )
         .await;
 
-        let resources = service
+        let output = service
             .lookup_resources(
                 &tenant_id,
                 LookupResourcesInput {
@@ -896,7 +928,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resources.len(), 2, "should respect limit of 2");
+        assert_eq!(output.resource_ids.len(), 2, "should respect limit of 2");
     }
 
     #[tokio::test]
@@ -1568,5 +1600,96 @@ mod tests {
             !result1_again.allowed,
             "snapshot 1 result should be cached as denied"
         );
+    }
+
+    // --- 4C: Snapshot Token Tests ---
+
+    #[tokio::test]
+    async fn expand_response_includes_snapshot_token() {
+        let (service, tenant_id) = make_service();
+        setup_schema(&service, &tenant_id).await;
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        let output = service
+            .expand_permission_tree(
+                &tenant_id,
+                ExpandPermissionInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_view".to_string(),
+                    consistency: Consistency::FullConsistency,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            output.snapshot.is_some(),
+            "FullConsistency expand should return snapshot token"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_resources_response_includes_snapshot_token() {
+        let (service, tenant_id) = make_service();
+        setup_schema(&service, &tenant_id).await;
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        let output = service
+            .lookup_resources(
+                &tenant_id,
+                LookupResourcesInput {
+                    resource_type: "document".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::FullConsistency,
+                    limit: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            output.snapshot.is_some(),
+            "FullConsistency lookup_resources should return snapshot token"
+        );
+        assert!(output.resource_ids.contains(&"readme".to_string()));
+    }
+
+    #[tokio::test]
+    async fn lookup_subjects_response_includes_snapshot_token() {
+        let (service, tenant_id) = make_service();
+        setup_schema(&service, &tenant_id).await;
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        let output = service
+            .lookup_subjects(
+                &tenant_id,
+                LookupSubjectsInput {
+                    object_type: "document".to_string(),
+                    object_id: "readme".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    consistency: Consistency::FullConsistency,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            output.snapshot.is_some(),
+            "FullConsistency lookup_subjects should return snapshot token"
+        );
+        assert!(!output.subjects.is_empty());
     }
 }

@@ -27,11 +27,20 @@ pub struct RestConfig {
     pub port: u16,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("url", &"[REDACTED]")
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,39 +166,43 @@ impl AppConfig {
     }
 
     fn apply_env_overrides(&mut self) {
-        if let Ok(v) = std::env::var("KRAALZIBAR_GRPC_HOST") {
+        self.apply_env_overrides_with(|key| std::env::var(key).ok());
+    }
+
+    fn apply_env_overrides_with(&mut self, env: impl Fn(&str) -> Option<String>) {
+        if let Some(v) = env("KRAALZIBAR_GRPC_HOST") {
             self.grpc.host = v;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_GRPC_PORT")
+        if let Some(v) = env("KRAALZIBAR_GRPC_PORT")
             && let Ok(port) = v.parse()
         {
             self.grpc.port = port;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_REST_HOST") {
+        if let Some(v) = env("KRAALZIBAR_REST_HOST") {
             self.rest.host = v;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_REST_PORT")
+        if let Some(v) = env("KRAALZIBAR_REST_PORT")
             && let Ok(port) = v.parse()
         {
             self.rest.port = port;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_DATABASE_URL") {
+        if let Some(v) = env("KRAALZIBAR_DATABASE_URL") {
             self.database.url = v;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_DATABASE_MAX_CONNECTIONS")
+        if let Some(v) = env("KRAALZIBAR_DATABASE_MAX_CONNECTIONS")
             && let Ok(n) = v.parse()
         {
             self.database.max_connections = n;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_ENGINE_MAX_DEPTH")
+        if let Some(v) = env("KRAALZIBAR_ENGINE_MAX_DEPTH")
             && let Ok(n) = v.parse()
         {
             self.engine.max_depth = n;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_LOG_LEVEL") {
+        if let Some(v) = env("KRAALZIBAR_LOG_LEVEL") {
             self.log.level = v;
         }
-        if let Ok(v) = std::env::var("KRAALZIBAR_LOG_FORMAT") {
+        if let Some(v) = env("KRAALZIBAR_LOG_FORMAT") {
             match v.as_str() {
                 "json" => self.log.format = LogFormat::Json,
                 "pretty" => self.log.format = LogFormat::Pretty,
@@ -435,5 +448,40 @@ check_cache_ttl_seconds = 120
         assert!(
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("schema_cache_capacity"))
         );
+    }
+
+    #[test]
+    fn database_config_debug_redacts_url() {
+        let config = DatabaseConfig {
+            url: "postgresql://user:secret_password@host:5432/db".to_string(),
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(
+            !debug_output.contains("secret_password"),
+            "debug output should not contain password: {debug_output}"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "debug output should contain [REDACTED]: {debug_output}"
+        );
+    }
+
+    #[test]
+    fn env_override_tests_use_mock_reader() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_GRPC_PORT" => Some("9999".to_string()),
+                "KRAALZIBAR_REST_PORT" => Some("7777".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.grpc.port, 9999);
+        assert_eq!(config.rest.port, 7777);
     }
 }

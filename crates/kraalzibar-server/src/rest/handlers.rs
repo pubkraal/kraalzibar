@@ -89,7 +89,9 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         ApiError::Parse(_) | ApiError::Validation(_) => {
             error_response(StatusCode::BAD_REQUEST, &err.to_string())
         }
-        ApiError::BreakingChanges(_) => error_response(StatusCode::CONFLICT, &err.to_string()),
+        ApiError::BreakingChanges(_) => {
+            error_response(StatusCode::PRECONDITION_FAILED, &err.to_string())
+        }
         ApiError::Check(CheckError::StorageError(_)) | ApiError::Storage(_) => {
             tracing::error!(error = %err, "internal storage error");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
@@ -175,8 +177,8 @@ where
         .expand_permission_tree(&state.tenant_id, input)
         .await
     {
-        Ok(tree) => {
-            let tree_json = expand_tree_to_json(&tree);
+        Ok(output) => {
+            let tree_json = expand_tree_to_json(&output.tree);
             json_response(
                 StatusCode::OK,
                 &ExpandPermissionResponse { tree: tree_json },
@@ -253,9 +255,11 @@ where
         .lookup_resources(&state.tenant_id, input)
         .await
     {
-        Ok(ids) => json_response(
+        Ok(output) => json_response(
             StatusCode::OK,
-            &LookupResourcesResponse { resource_ids: ids },
+            &LookupResourcesResponse {
+                resource_ids: output.resource_ids,
+            },
         ),
         Err(e) => api_error_to_response(e),
     }
@@ -289,8 +293,9 @@ where
     };
 
     match state.service.lookup_subjects(&state.tenant_id, input).await {
-        Ok(subjects) => {
-            let subjects: Vec<SubjectResponse> = subjects
+        Ok(output) => {
+            let subjects: Vec<SubjectResponse> = output
+                .subjects
                 .into_iter()
                 .map(|s| SubjectResponse {
                     subject_type: s.subject_type,
@@ -801,5 +806,19 @@ mod tests {
         response.assert_status(axum::http::StatusCode::BAD_REQUEST);
         let body: serde_json::Value = response.json();
         assert!(body["error"].as_str().unwrap().contains("batch size"));
+    }
+
+    #[tokio::test]
+    async fn breaking_schema_returns_412() {
+        let server = make_test_server();
+        setup_schema(&server).await;
+
+        // Try to write a breaking schema without force
+        let response = server
+            .post("/v1/schema")
+            .json(&json!({"schema": "definition user {}"}))
+            .await;
+
+        response.assert_status(axum::http::StatusCode::PRECONDITION_FAILED);
     }
 }
