@@ -1,0 +1,10 @@
+[package]
+name = "kraalzibar-storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kraalzibar-core = { path = "../kraalzibar-core" }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["full"] }
