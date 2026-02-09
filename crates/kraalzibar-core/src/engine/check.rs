@@ -1124,4 +1124,149 @@ mod tests {
         let result = engine.check(&request).await.unwrap();
         assert!(result.allowed);
     }
+
+    fn plan_schema() -> Schema {
+        use crate::schema::parse_schema;
+        parse_schema(
+            r#"
+            definition user {}
+
+            definition group {
+                relation member: user | group#member
+            }
+
+            definition category {
+                relation owner: user
+                relation editor: user | group#member
+                relation viewer: user | group#member
+
+                permission can_edit = owner + editor
+                permission can_view = can_edit + viewer
+            }
+
+            definition object {
+                relation parent: category
+                relation owner: user
+                relation editor: user | group#member
+                relation viewer: user | group#member
+
+                permission can_edit = owner + editor + parent->can_edit
+                permission can_view = can_edit + viewer + parent->can_view
+            }
+            "#,
+        )
+        .unwrap()
+    }
+
+    fn plan_tuples() -> Vec<Tuple> {
+        vec![
+            // john is a direct viewer of object:readme
+            Tuple::new(
+                ObjectRef::new("object", "readme"),
+                "viewer",
+                SubjectRef::direct("user", "john"),
+            ),
+            // group:developers members can view object:readme
+            Tuple::new(
+                ObjectRef::new("object", "readme"),
+                "viewer",
+                SubjectRef::userset("group", "developers", "member"),
+            ),
+            // alice is a member of group:developers
+            Tuple::new(
+                ObjectRef::new("group", "developers"),
+                "member",
+                SubjectRef::direct("user", "alice"),
+            ),
+            // bob owns category:docs
+            Tuple::new(
+                ObjectRef::new("category", "docs"),
+                "owner",
+                SubjectRef::direct("user", "bob"),
+            ),
+            // object:readme is in category:docs
+            Tuple::new(
+                ObjectRef::new("object", "readme"),
+                "parent",
+                SubjectRef::direct("category", "docs"),
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn check_complex_e2e_plan_scenario() {
+        let schema = plan_schema();
+        let tuples = plan_tuples();
+        let engine = make_engine(schema, tuples);
+
+        // john can view (direct viewer)
+        let result = engine
+            .check(&CheckRequest {
+                object_type: "object".to_string(),
+                object_id: "readme".to_string(),
+                permission: "can_view".to_string(),
+                subject_type: "user".to_string(),
+                subject_id: "john".to_string(),
+                snapshot: None,
+            })
+            .await
+            .unwrap();
+        assert!(result.allowed, "john should be able to view");
+
+        // alice can view (via group:developers#member)
+        let result = engine
+            .check(&CheckRequest {
+                object_type: "object".to_string(),
+                object_id: "readme".to_string(),
+                permission: "can_view".to_string(),
+                subject_type: "user".to_string(),
+                subject_id: "alice".to_string(),
+                snapshot: None,
+            })
+            .await
+            .unwrap();
+        assert!(result.allowed, "alice should be able to view");
+
+        // bob can edit (owner of parent category via parent->can_edit)
+        let result = engine
+            .check(&CheckRequest {
+                object_type: "object".to_string(),
+                object_id: "readme".to_string(),
+                permission: "can_edit".to_string(),
+                subject_type: "user".to_string(),
+                subject_id: "bob".to_string(),
+                snapshot: None,
+            })
+            .await
+            .unwrap();
+        assert!(result.allowed, "bob should be able to edit");
+
+        // alice cannot edit (only viewer, not editor)
+        let result = engine
+            .check(&CheckRequest {
+                object_type: "object".to_string(),
+                object_id: "readme".to_string(),
+                permission: "can_edit".to_string(),
+                subject_type: "user".to_string(),
+                subject_id: "alice".to_string(),
+                snapshot: None,
+            })
+            .await
+            .unwrap();
+        assert!(!result.allowed, "alice should not be able to edit");
+
+        // random user cannot view
+        let result = engine
+            .check(&CheckRequest {
+                object_type: "object".to_string(),
+                object_id: "readme".to_string(),
+                permission: "can_view".to_string(),
+                subject_type: "user".to_string(),
+                subject_id: "eve".to_string(),
+                snapshot: None,
+            })
+            .await
+            .unwrap();
+        assert!(!result.allowed, "eve should not be able to view");
+    }
 }
