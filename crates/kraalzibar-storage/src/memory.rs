@@ -68,8 +68,8 @@ pub struct InMemoryStore {
     state: Arc<Mutex<InnerState>>,
 }
 
-impl InMemoryStore {
-    fn new() -> Self {
+impl Default for InMemoryStore {
+    fn default() -> Self {
         Self {
             state: Arc::new(Mutex::new(InnerState {
                 current_tx: 0,
@@ -77,6 +77,12 @@ impl InMemoryStore {
                 schema: None,
             })),
         }
+    }
+}
+
+impl InMemoryStore {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -205,10 +211,7 @@ impl StoreFactory for InMemoryStoreFactory {
 
     fn for_tenant(&self, tenant_id: &TenantId) -> InMemoryStore {
         let mut stores = self.stores.lock().unwrap();
-        stores
-            .entry(tenant_id.clone())
-            .or_insert_with(InMemoryStore::new)
-            .clone()
+        stores.entry(tenant_id.clone()).or_default().clone()
     }
 }
 
