@@ -16,18 +16,40 @@ use crate::service::{
 use super::AppState;
 use super::types::*;
 
-fn resolve_consistency(c: Option<&ConsistencyRequest>) -> Consistency {
+fn resolve_consistency(
+    c: Option<&ConsistencyRequest>,
+) -> Result<Consistency, (StatusCode, Json<serde_json::Value>)> {
     match c {
-        Some(ConsistencyRequest::Full) => Consistency::FullConsistency,
+        Some(ConsistencyRequest::Full) => Ok(Consistency::FullConsistency),
         Some(ConsistencyRequest::AtLeastAsFresh { token }) => {
-            let val: u64 = token.parse().unwrap_or(0);
-            Consistency::AtLeastAsFresh(SnapshotToken::new(val))
+            let val: u64 = token.parse().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::to_value(ErrorResponse {
+                            error: "invalid snapshot token format".to_string(),
+                        })
+                        .unwrap(),
+                    ),
+                )
+            })?;
+            Ok(Consistency::AtLeastAsFresh(SnapshotToken::new(val)))
         }
         Some(ConsistencyRequest::AtExactSnapshot { token }) => {
-            let val: u64 = token.parse().unwrap_or(0);
-            Consistency::AtExactSnapshot(SnapshotToken::new(val))
+            let val: u64 = token.parse().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::to_value(ErrorResponse {
+                            error: "invalid snapshot token format".to_string(),
+                        })
+                        .unwrap(),
+                    ),
+                )
+            })?;
+            Ok(Consistency::AtExactSnapshot(SnapshotToken::new(val)))
         }
-        _ => Consistency::MinimizeLatency,
+        _ => Ok(Consistency::MinimizeLatency),
     }
 }
 
@@ -69,7 +91,10 @@ where
         permission: req.permission,
         subject_type: req.subject_type,
         subject_id: req.subject_id,
-        consistency: resolve_consistency(req.consistency.as_ref()),
+        consistency: match resolve_consistency(req.consistency.as_ref()) {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        },
     };
 
     match state
@@ -109,7 +134,10 @@ where
         object_type: req.resource_type,
         object_id: req.resource_id,
         permission: req.permission,
-        consistency: resolve_consistency(req.consistency.as_ref()),
+        consistency: match resolve_consistency(req.consistency.as_ref()) {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        },
     };
 
     match state
@@ -178,7 +206,10 @@ where
         permission: req.permission,
         subject_type: req.subject_type,
         subject_id: req.subject_id,
-        consistency: resolve_consistency(req.consistency.as_ref()),
+        consistency: match resolve_consistency(req.consistency.as_ref()) {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        },
         limit: req.limit,
     };
 
@@ -211,7 +242,10 @@ where
         object_id: req.resource_id,
         permission: req.permission,
         subject_type: req.subject_type,
-        consistency: resolve_consistency(req.consistency.as_ref()),
+        consistency: match resolve_consistency(req.consistency.as_ref()) {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        },
     };
 
     match state.service.lookup_subjects(&state.tenant_id, input).await {
@@ -319,7 +353,10 @@ where
         })
         .unwrap_or_default();
 
-    let consistency = resolve_consistency(req.consistency.as_ref());
+    let consistency = match resolve_consistency(req.consistency.as_ref()) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     match state
         .service
@@ -429,6 +466,11 @@ mod tests {
     use std::sync::Arc;
 
     fn make_test_server() -> TestServer {
+        let (server, _metrics) = make_test_server_with_metrics();
+        server
+    }
+
+    fn make_test_server_with_metrics() -> (TestServer, Arc<crate::metrics::Metrics>) {
         let factory = Arc::new(InMemoryStoreFactory::new());
         let service = Arc::new(AuthzService::new(
             factory,
@@ -436,9 +478,14 @@ mod tests {
             SchemaLimits::default(),
         ));
         let tenant_id = TenantId::new(uuid::Uuid::new_v4());
-        let state = AppState { service, tenant_id };
+        let metrics = Arc::new(crate::metrics::Metrics::new());
+        let state = AppState {
+            service,
+            tenant_id,
+            metrics: Arc::clone(&metrics),
+        };
         let app = create_router(state);
-        TestServer::new(app).unwrap()
+        (TestServer::new(app).unwrap(), metrics)
     }
 
     const SCHEMA: &str = r#"
@@ -680,5 +727,20 @@ mod tests {
             .await;
 
         response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn metrics_increment_on_requests() {
+        let (server, metrics) = make_test_server_with_metrics();
+
+        assert_eq!(metrics.request_total(), 0);
+
+        server.get("/healthz").await;
+        assert_eq!(metrics.request_total(), 1);
+        assert_eq!(metrics.request_success(), 1);
+
+        server.get("/v1/schema").await;
+        assert_eq!(metrics.request_total(), 2);
+        assert_eq!(metrics.request_error(), 1);
     }
 }

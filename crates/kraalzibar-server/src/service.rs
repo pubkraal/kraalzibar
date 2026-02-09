@@ -329,6 +329,8 @@ fn collect_subjects(tree: &ExpandTree, subject_type: &str, out: &mut Vec<Subject
             }
         }
         ExpandTree::Exclusion { base, .. } => {
+            // Only collect from `base` — subjects in `excluded` are removed
+            // by the exclusion operation, so including them would be incorrect.
             collect_subjects(base, subject_type, out);
         }
         ExpandTree::Arrow { children, .. } => {

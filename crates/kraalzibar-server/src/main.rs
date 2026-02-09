@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rest_state = rest::AppState {
         service: Arc::clone(&service),
         tenant_id,
+        metrics: Arc::clone(&metrics),
     };
     let rest_router = rest::create_router(rest_state).route(
         "/metrics",
@@ -96,15 +97,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(%grpc_addr, "gRPC server listening");
     tracing::info!(%rest_addr, "REST server listening");
 
+    let (shutdown_tx, _) = tokio::sync::watch::channel(());
+    let shutdown_rx_rest = shutdown_tx.subscribe();
+
     let grpc_server = tonic::transport::Server::builder()
         .add_service(health_service)
         .add_service(permission_svc)
         .add_service(relationship_svc)
         .add_service(schema_svc)
-        .serve_with_shutdown(grpc_addr, shutdown_signal());
+        .serve_with_shutdown(grpc_addr, shutdown_signal(shutdown_tx));
 
     let rest_listener = tokio::net::TcpListener::bind(rest_addr).await?;
-    let rest_server = axum::serve(rest_listener, rest_router);
+    let rest_server = axum::serve(rest_listener, rest_router).with_graceful_shutdown(async move {
+        let mut rx = shutdown_rx_rest;
+        let _ = rx.changed().await;
+    });
 
     tokio::select! {
         result = grpc_server => {
@@ -123,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(shutdown_tx: tokio::sync::watch::Sender<()>) {
     let ctrl_c = tokio::signal::ctrl_c();
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("failed to register SIGTERM handler");
@@ -132,4 +139,6 @@ async fn shutdown_signal() {
         _ = ctrl_c => { tracing::info!("received SIGINT"); }
         _ = sigterm.recv() => { tracing::info!("received SIGTERM"); }
     }
+
+    let _ = shutdown_tx.send(());
 }

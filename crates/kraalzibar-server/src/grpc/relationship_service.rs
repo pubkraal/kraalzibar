@@ -47,7 +47,7 @@ where
 
             match op {
                 v1::relationship_update::Operation::Touch => {
-                    writes.push(conversions::proto_relationship_to_write(rel));
+                    writes.push(conversions::proto_relationship_to_write(rel)?);
                 }
                 v1::relationship_update::Operation::Delete => {
                     deletes.push(conversions::proto_filter_to_domain(
@@ -70,7 +70,7 @@ where
             .service
             .write_relationships(&self.tenant_id, &writes, &deletes)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(super::api_error_to_status)?;
 
         Ok(Response::new(v1::WriteRelationshipsResponse {
             written_at: conversions::snapshot_to_zed_token(Some(token)),
@@ -89,7 +89,7 @@ where
             .map(conversions::proto_filter_to_domain)
             .unwrap_or_default();
 
-        let consistency = conversions::proto_consistency_to_domain(req.consistency.as_ref());
+        let consistency = conversions::proto_consistency_to_domain(req.consistency.as_ref())?;
 
         let limit = if req.optional_limit > 0 {
             Some(req.optional_limit as usize)
@@ -101,7 +101,7 @@ where
             .service
             .read_relationships(&self.tenant_id, &filter, consistency, limit)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(super::api_error_to_status)?;
 
         let relationships: Vec<_> = tuples
             .iter()

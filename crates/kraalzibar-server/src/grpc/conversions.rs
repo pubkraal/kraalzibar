@@ -39,19 +39,20 @@ pub fn domain_tuple_to_proto(tuple: &Tuple) -> v1::Relationship {
     }
 }
 
-pub fn proto_relationship_to_write(rel: &v1::Relationship) -> TupleWrite {
+#[allow(clippy::result_large_err)]
+pub fn proto_relationship_to_write(rel: &v1::Relationship) -> Result<TupleWrite, tonic::Status> {
     let object = rel
         .object
         .as_ref()
         .map(proto_object_to_domain)
-        .unwrap_or_else(|| ObjectRef::new("", ""));
+        .ok_or_else(|| tonic::Status::invalid_argument("relationship object is required"))?;
     let subject = rel
         .subject
         .as_ref()
         .map(proto_subject_to_domain)
-        .unwrap_or_else(|| SubjectRef::direct("", ""));
+        .ok_or_else(|| tonic::Status::invalid_argument("relationship subject is required"))?;
 
-    TupleWrite::new(object, &rel.relation, subject)
+    Ok(TupleWrite::new(object, &rel.relation, subject))
 }
 
 pub fn proto_filter_to_domain(filter: &v1::RelationshipFilter) -> TupleFilter {
@@ -65,16 +66,21 @@ pub fn proto_filter_to_domain(filter: &v1::RelationshipFilter) -> TupleFilter {
     }
 }
 
-pub fn proto_consistency_to_domain(consistency: Option<&v1::Consistency>) -> Consistency {
+#[allow(clippy::result_large_err)]
+pub fn proto_consistency_to_domain(
+    consistency: Option<&v1::Consistency>,
+) -> Result<Consistency, tonic::Status> {
     match consistency.and_then(|c| c.requirement.as_ref()) {
-        Some(v1::consistency::Requirement::FullConsistency(true)) => Consistency::FullConsistency,
+        Some(v1::consistency::Requirement::FullConsistency(true)) => {
+            Ok(Consistency::FullConsistency)
+        }
         Some(v1::consistency::Requirement::AtLeastAsFresh(token)) => {
-            Consistency::AtLeastAsFresh(zed_token_to_snapshot(token))
+            Ok(Consistency::AtLeastAsFresh(zed_token_to_snapshot(token)?))
         }
         Some(v1::consistency::Requirement::AtExactSnapshot(token)) => {
-            Consistency::AtExactSnapshot(zed_token_to_snapshot(token))
+            Ok(Consistency::AtExactSnapshot(zed_token_to_snapshot(token)?))
         }
-        _ => Consistency::MinimizeLatency,
+        _ => Ok(Consistency::MinimizeLatency),
     }
 }
 
@@ -84,9 +90,13 @@ pub fn snapshot_to_zed_token(snapshot: Option<SnapshotToken>) -> Option<v1::ZedT
     })
 }
 
-fn zed_token_to_snapshot(token: &v1::ZedToken) -> SnapshotToken {
-    let value: u64 = token.token.parse().unwrap_or(0);
-    SnapshotToken::new(value)
+#[allow(clippy::result_large_err)]
+fn zed_token_to_snapshot(token: &v1::ZedToken) -> Result<SnapshotToken, tonic::Status> {
+    let value: u64 = token
+        .token
+        .parse()
+        .map_err(|_| tonic::Status::invalid_argument("invalid snapshot token format"))?;
+    Ok(SnapshotToken::new(value))
 }
 
 pub fn domain_expand_tree_to_proto(
@@ -193,7 +203,7 @@ mod tests {
             SubjectRef::direct("user", "alice"),
         );
         let proto = domain_tuple_to_proto(&tuple);
-        let write = proto_relationship_to_write(&proto);
+        let write = proto_relationship_to_write(&proto).unwrap();
 
         assert_eq!(write.object.object_type, "document");
         assert_eq!(write.relation, "viewer");
@@ -221,7 +231,7 @@ mod tests {
         let proto = v1::Consistency {
             requirement: Some(v1::consistency::Requirement::FullConsistency(true)),
         };
-        let domain = proto_consistency_to_domain(Some(&proto));
+        let domain = proto_consistency_to_domain(Some(&proto)).unwrap();
         assert_eq!(domain, Consistency::FullConsistency);
     }
 
@@ -230,7 +240,7 @@ mod tests {
         let proto = v1::Consistency {
             requirement: Some(v1::consistency::Requirement::MinimizeLatency(true)),
         };
-        let domain = proto_consistency_to_domain(Some(&proto));
+        let domain = proto_consistency_to_domain(Some(&proto)).unwrap();
         assert_eq!(domain, Consistency::MinimizeLatency);
     }
 
@@ -241,14 +251,25 @@ mod tests {
                 token: "42".to_string(),
             })),
         };
-        let domain = proto_consistency_to_domain(Some(&proto));
+        let domain = proto_consistency_to_domain(Some(&proto)).unwrap();
         assert_eq!(domain, Consistency::AtLeastAsFresh(SnapshotToken::new(42)));
     }
 
     #[test]
     fn convert_consistency_none_defaults_to_minimize_latency() {
-        let domain = proto_consistency_to_domain(None);
+        let domain = proto_consistency_to_domain(None).unwrap();
         assert_eq!(domain, Consistency::MinimizeLatency);
+    }
+
+    #[test]
+    fn convert_consistency_rejects_invalid_token() {
+        let proto = v1::Consistency {
+            requirement: Some(v1::consistency::Requirement::AtLeastAsFresh(v1::ZedToken {
+                token: "not-a-number".to_string(),
+            })),
+        };
+        let result = proto_consistency_to_domain(Some(&proto));
+        assert!(result.is_err());
     }
 
     #[test]

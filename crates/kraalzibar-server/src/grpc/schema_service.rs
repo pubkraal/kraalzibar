@@ -35,15 +35,7 @@ where
             .service
             .write_schema(&self.tenant_id, &req.schema, req.force)
             .await
-            .map_err(|e| match &e {
-                crate::error::ApiError::Parse(_) | crate::error::ApiError::Validation(_) => {
-                    Status::invalid_argument(e.to_string())
-                }
-                crate::error::ApiError::BreakingChanges(_) => {
-                    Status::failed_precondition(e.to_string())
-                }
-                _ => Status::internal(e.to_string()),
-            })?;
+            .map_err(super::api_error_to_status)?;
 
         Ok(Response::new(v1::WriteSchemaResponse {
             written_at: None,
@@ -59,7 +51,7 @@ where
             .service
             .read_schema(&self.tenant_id)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(super::api_error_to_status)?;
 
         match schema {
             Some(text) => Ok(Response::new(v1::ReadSchemaResponse { schema: text })),

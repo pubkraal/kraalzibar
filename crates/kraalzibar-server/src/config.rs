@@ -198,6 +198,26 @@ impl AppConfig {
                 "database.max_connections must be non-zero".to_string(),
             ));
         }
+        if self.engine.max_concurrent_branches == 0 {
+            return Err(ConfigError::Validation(
+                "engine.max_concurrent_branches must be non-zero".to_string(),
+            ));
+        }
+        if self.schema_limits.max_types == 0 {
+            return Err(ConfigError::Validation(
+                "schema_limits.max_types must be non-zero".to_string(),
+            ));
+        }
+        if self.schema_limits.max_relations_per_type == 0 {
+            return Err(ConfigError::Validation(
+                "schema_limits.max_relations_per_type must be non-zero".to_string(),
+            ));
+        }
+        if self.schema_limits.max_permissions_per_type == 0 {
+            return Err(ConfigError::Validation(
+                "schema_limits.max_permissions_per_type must be non-zero".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -323,6 +343,28 @@ port = 9090
         let result = config.validate();
         assert!(
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_depth"))
+        );
+    }
+
+    #[test]
+    fn validation_rejects_zero_max_concurrent_branches() {
+        let mut config = AppConfig::default();
+        config.engine.max_concurrent_branches = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_concurrent_branches"))
+        );
+    }
+
+    #[test]
+    fn validation_rejects_zero_schema_limits() {
+        let mut config = AppConfig::default();
+        config.schema_limits.max_types = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_types"))
         );
     }
 }
