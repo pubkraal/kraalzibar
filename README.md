@@ -27,7 +27,32 @@ Early development — not yet usable.
 
 ## Getting Started
 
-_Installation and run instructions will be added as the project matures._
+### Build
+
+```bash
+cargo build
+```
+
+### Test
+
+```bash
+# Unit and in-memory tests
+cargo test
+
+# PostgreSQL integration tests (requires Docker)
+docker compose -f docker/docker-compose.yml up -d
+cargo test -- --ignored
+```
+
+### Project Structure
+
+```
+crates/
+  kraalzibar-core/      # Domain types, schema DSL parser, validation
+  kraalzibar-storage/   # Storage traits, in-memory + PostgreSQL backends
+docker/
+  docker-compose.yml    # PostgreSQL 16 for local development
+```
 
 ## License
 
