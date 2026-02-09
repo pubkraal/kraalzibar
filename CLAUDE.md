@@ -70,6 +70,33 @@ crates/
   kraalzibar-client/   # Rust SDK
 ```
 
+## Twelve-Factor App
+
+All design and implementation must adhere to the
+[twelve-factor methodology](https://12factor.net). In practice:
+
+1. **Codebase**: One repo, many deploys
+2. **Dependencies**: Explicitly declared in `Cargo.toml` — no implicit system deps
+3. **Config**: All configuration via environment variables (TOML config file is
+   a convenience layer that can be overridden by env vars, never hardcoded)
+4. **Backing services**: PostgreSQL is an attached resource identified by URL —
+   swappable without code changes
+5. **Build, release, run**: Strict separation — the binary is built once and
+   configured at run time
+6. **Processes**: The server is stateless. All persistent state lives in
+   PostgreSQL. In-process caches are ephemeral and reconstructable.
+7. **Port binding**: The service exports gRPC and HTTP by binding to ports
+   specified via config/env
+8. **Concurrency**: Scale out via process model (run multiple instances behind
+   a load balancer)
+9. **Disposability**: Fast startup, graceful shutdown on SIGTERM/SIGINT
+10. **Dev/prod parity**: Docker Compose provides a production-like local
+    environment
+11. **Logs**: Structured JSON log events written to stdout — never to files.
+    Log routing is the environment's responsibility.
+12. **Admin processes**: One-off tasks (migrations, tenant provisioning) run as
+    separate commands using the same codebase and config
+
 ## Key Design Decisions
 
 - **Multi-tenancy**: Separate PG schema per tenant, factory pattern for
