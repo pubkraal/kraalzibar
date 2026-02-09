@@ -165,3 +165,28 @@ configuration instructions as they become available.
 - **`lookup_resources`** scans all tuples for a type, deduplicates object IDs,
   then checks each one. Default limit is 1000. This is O(n) and correct but
   slow for large datasets — optimize in later phases.
+- **Never expose storage errors to clients.** Use generic "internal server error"
+  message in both gRPC Status and REST JSON responses. Log the real error
+  server-side with `tracing::error!`.
+- **Body and message size limits** must be set explicitly. axum:
+  `DefaultBodyLimit::max(4MB)`. tonic: `.max_decoding_message_size(4MB)` on
+  each service server. Without these, clients can OOM the server.
+- **Input validation at API boundaries**: validate identifiers are non-empty and
+  under 256 chars, enforce batch size limits (1000 for writes), and clamp
+  user-provided query limits to a safe max (e.g., `min(requested, 10_000)`).
+- **`Vec::dedup()` only removes consecutive duplicates** — always sort first.
+  This bit `lookup_subjects` where results from different tree branches could
+  interleave.
+- **Pattern-match with wildcards on proto booleans**: use `FullConsistency(_)`
+  not `FullConsistency(true)`, since protobuf can send `false`.
+- **Clippy `result_large_err`**: `tonic::Status` is 176 bytes, triggering the
+  lint on `Result<_, tonic::Status>`. Suppress with
+  `#[allow(clippy::result_large_err)]` on affected conversion functions.
+- **Config test env var races**: tests that set env vars like
+  `KRAALZIBAR_GRPC_PORT` can race with other tests. Use unique var names or
+  the `serial_test` crate. Known flaky test: `load_from_toml_file`.
+- **Refactoring can create dead code**: after replacing `ErrorResponse` struct
+  with `serde_json::json!()` in handlers, clippy caught the now-unused type.
+  Always run clippy after refactors.
+- **axum `DefaultBodyLimit`** requires importing from `axum::extract`. Add it
+  as a `.layer()` on the router, not on individual routes.
