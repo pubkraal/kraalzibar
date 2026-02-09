@@ -148,6 +148,15 @@ pub struct TupleFilter {
 }
 
 impl TupleFilter {
+    pub fn has_any_field(&self) -> bool {
+        self.object_type.is_some()
+            || self.object_id.is_some()
+            || self.relation.is_some()
+            || self.subject_type.is_some()
+            || self.subject_id.is_some()
+            || self.subject_relation.is_some()
+    }
+
     pub fn matches(&self, tuple: &Tuple) -> bool {
         if let Some(ref ot) = self.object_type
             && ot != &tuple.object.object_type
@@ -468,6 +477,20 @@ mod tests {
         );
 
         assert!(filter.matches(&matching));
+    }
+
+    #[test]
+    fn empty_filter_has_no_fields() {
+        assert!(!TupleFilter::default().has_any_field());
+    }
+
+    #[test]
+    fn filter_with_one_field_has_fields() {
+        let filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        assert!(filter.has_any_field());
     }
 
     // --- SnapshotToken ---

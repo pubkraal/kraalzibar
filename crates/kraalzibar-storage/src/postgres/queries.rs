@@ -17,6 +17,13 @@ pub async fn next_tx_id<'e>(
         .fetch_one(executor)
         .await
         .map_err(to_storage_error)?;
+
+    if row.0 == ACTIVE_TX_ID {
+        return Err(StorageError::Internal(
+            "transaction ID sequence exhausted (reached sentinel value)".to_string(),
+        ));
+    }
+
     Ok(row.0)
 }
 
@@ -75,9 +82,10 @@ pub async fn delete_matching_tuples<'e>(
     filter: &TupleFilter,
     tx_id: i64,
 ) -> Result<(), StorageError> {
-    let mut conditions = vec![format!("deleted_tx_id = {ACTIVE_TX_ID}")];
+    // $1 = ACTIVE_TX_ID (WHERE condition), $2 = tx_id (SET value)
+    let mut conditions = vec!["deleted_tx_id = $1".to_string()];
     let mut binds: Vec<Option<&str>> = Vec::new();
-    let mut bind_idx = 1;
+    let mut bind_idx = 3;
 
     if let Some(ref ot) = filter.object_type {
         conditions.push(format!("object_type = ${bind_idx}"));
@@ -120,9 +128,9 @@ pub async fn delete_matching_tuples<'e>(
 
     let where_clause = conditions.join(" AND ");
     let query =
-        format!("UPDATE {schema}.relation_tuples SET deleted_tx_id = {tx_id} WHERE {where_clause}");
+        format!("UPDATE {schema}.relation_tuples SET deleted_tx_id = $2 WHERE {where_clause}");
 
-    let mut q = sqlx::query(&query);
+    let mut q = sqlx::query(&query).bind(ACTIVE_TX_ID).bind(tx_id);
     for bind in &binds {
         q = q.bind(*bind);
     }
@@ -135,13 +143,15 @@ pub async fn read_tuples<'e>(
     schema: &str,
     filter: &TupleFilter,
     snapshot: i64,
+    limit: Option<usize>,
 ) -> Result<Vec<Tuple>, StorageError> {
+    // $1 = snapshot (used in both created/deleted conditions)
     let mut conditions = vec![
-        format!("created_tx_id <= {snapshot}"),
-        format!("deleted_tx_id > {snapshot}"),
+        "created_tx_id <= $1".to_string(),
+        "deleted_tx_id > $1".to_string(),
     ];
     let mut binds: Vec<Option<&str>> = Vec::new();
-    let mut bind_idx = 1;
+    let mut bind_idx = 2;
 
     if let Some(ref ot) = filter.object_type {
         conditions.push(format!("object_type = ${bind_idx}"));
@@ -183,14 +193,19 @@ pub async fn read_tuples<'e>(
     let _ = bind_idx;
 
     let where_clause = conditions.join(" AND ");
+    let limit_clause = match limit {
+        Some(n) => format!(" LIMIT {n}"),
+        None => String::new(),
+    };
     let query = format!(
         r#"SELECT object_type, object_id, relation, subject_type, subject_id, subject_relation
            FROM {schema}.relation_tuples
-           WHERE {where_clause}"#
+           WHERE {where_clause}{limit_clause}"#
     );
 
     let mut q =
-        sqlx::query_as::<_, (String, String, String, String, String, Option<String>)>(&query);
+        sqlx::query_as::<_, (String, String, String, String, String, Option<String>)>(&query)
+            .bind(snapshot);
     for bind in &binds {
         q = q.bind(*bind);
     }

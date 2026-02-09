@@ -6,7 +6,10 @@ pub async fn run_gc_cycle<S: RelationshipStore + SchemaStore>(
     store: &S,
     schema: &kraalzibar_core::schema::types::Schema,
 ) -> Result<usize, StorageError> {
-    let all_tuples = store.read(&TupleFilter::default(), None).await?;
+    let snapshot = store.snapshot().await?;
+    let all_tuples = store
+        .read(&TupleFilter::default(), Some(snapshot), None)
+        .await?;
 
     let mut orphan_filters = Vec::new();
 
@@ -70,7 +73,10 @@ mod tests {
 
         assert_eq!(removed, 1);
 
-        let remaining = store.read(&TupleFilter::default(), None).await.unwrap();
+        let remaining = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].object.object_type, "doc");
     }
@@ -96,7 +102,10 @@ mod tests {
 
         assert_eq!(removed, 1);
 
-        let remaining = store.read(&TupleFilter::default(), None).await.unwrap();
+        let remaining = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].relation, "viewer");
     }
@@ -124,7 +133,10 @@ mod tests {
 
         assert_eq!(removed, 0);
 
-        let remaining = store.read(&TupleFilter::default(), None).await.unwrap();
+        let remaining = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert_eq!(remaining.len(), 2);
     }
 

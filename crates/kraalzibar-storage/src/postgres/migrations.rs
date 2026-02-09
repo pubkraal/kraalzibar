@@ -1,11 +1,13 @@
 use sqlx::PgPool;
 
-fn validate_schema_name(name: &str) -> Result<(), sqlx::Error> {
+use crate::traits::StorageError;
+
+fn validate_schema_name(name: &str) -> Result<(), StorageError> {
     let is_valid = name.starts_with("tenant_")
         && name.len() == 39
         && name[7..].chars().all(|c| c.is_ascii_hexdigit());
     if !is_valid {
-        return Err(sqlx::Error::Protocol(format!(
+        return Err(StorageError::Internal(format!(
             "invalid tenant schema name: {name}"
         )));
     }
@@ -43,10 +45,18 @@ pub async fn run_shared_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<(), sqlx::Error> {
+pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<(), StorageError> {
     validate_schema_name(schema_name)?;
+
+    fn to_storage_error(e: sqlx::Error) -> StorageError {
+        StorageError::Internal(e.to_string())
+    }
+
     let create_schema = format!("CREATE SCHEMA IF NOT EXISTS {schema_name}");
-    sqlx::query(&create_schema).execute(pool).await?;
+    sqlx::query(&create_schema)
+        .execute(pool)
+        .await
+        .map_err(to_storage_error)?;
 
     let create_tuples = format!(
         r#"
@@ -65,7 +75,10 @@ pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<()
         )
         "#
     );
-    sqlx::query(&create_tuples).execute(pool).await?;
+    sqlx::query(&create_tuples)
+        .execute(pool)
+        .await
+        .map_err(to_storage_error)?;
 
     let create_lookup_idx = format!(
         r#"
@@ -74,7 +87,10 @@ pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<()
             (object_type, object_id, relation, deleted_tx_id)
         "#
     );
-    sqlx::query(&create_lookup_idx).execute(pool).await?;
+    sqlx::query(&create_lookup_idx)
+        .execute(pool)
+        .await
+        .map_err(to_storage_error)?;
 
     let create_reverse_idx = format!(
         r#"
@@ -83,7 +99,10 @@ pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<()
             (subject_type, subject_id, subject_relation, deleted_tx_id)
         "#
     );
-    sqlx::query(&create_reverse_idx).execute(pool).await?;
+    sqlx::query(&create_reverse_idx)
+        .execute(pool)
+        .await
+        .map_err(to_storage_error)?;
 
     let create_schema_defs = format!(
         r#"
@@ -94,10 +113,16 @@ pub async fn create_tenant_schema(pool: &PgPool, schema_name: &str) -> Result<()
         )
         "#
     );
-    sqlx::query(&create_schema_defs).execute(pool).await?;
+    sqlx::query(&create_schema_defs)
+        .execute(pool)
+        .await
+        .map_err(to_storage_error)?;
 
     let create_seq = format!("CREATE SEQUENCE IF NOT EXISTS {schema_name}.tx_id_seq");
-    sqlx::query(&create_seq).execute(pool).await?;
+    sqlx::query(&create_seq)
+        .execute(pool)
+        .await
+        .map_err(to_storage_error)?;
 
     Ok(())
 }

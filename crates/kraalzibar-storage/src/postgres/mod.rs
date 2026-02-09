@@ -27,6 +27,12 @@ impl RelationshipStore for PostgresStore {
         writes: &[TupleWrite],
         deletes: &[TupleFilter],
     ) -> Result<SnapshotToken, StorageError> {
+        for filter in deletes {
+            if !filter.has_any_field() {
+                return Err(StorageError::EmptyDeleteFilter);
+            }
+        }
+
         let mut tx = self
             .pool
             .begin()
@@ -55,6 +61,7 @@ impl RelationshipStore for PostgresStore {
         &self,
         filter: &TupleFilter,
         snapshot: Option<SnapshotToken>,
+        limit: Option<usize>,
     ) -> Result<Vec<Tuple>, StorageError> {
         let snap = match snapshot {
             Some(token) => {
@@ -73,7 +80,7 @@ impl RelationshipStore for PostgresStore {
             None => queries::current_tx_id(&self.pool, &self.schema).await?,
         };
 
-        queries::read_tuples(&self.pool, &self.schema, filter, snap).await
+        queries::read_tuples(&self.pool, &self.schema, filter, snap, limit).await
     }
 
     async fn snapshot(&self) -> Result<SnapshotToken, StorageError> {
@@ -123,9 +130,7 @@ impl PostgresStoreFactory {
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        migrations::create_tenant_schema(&self.pool, &schema_name)
-            .await
-            .map_err(|e| StorageError::Internal(e.to_string()))?;
+        migrations::create_tenant_schema(&self.pool, &schema_name).await?;
 
         let mut schemas = self.schemas.lock().unwrap();
         schemas.insert(tenant_id.clone(), schema_name);
@@ -204,7 +209,10 @@ mod pg_tests {
             .unwrap();
         assert_eq!(token.value(), 1);
 
-        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].object, ObjectRef::new("doc", "readme"));
         assert_eq!(results[0].relation, "viewer");
@@ -251,7 +259,7 @@ mod pg_tests {
             .unwrap();
 
         let results = store
-            .read(&TupleFilter::default(), Some(snap1))
+            .read(&TupleFilter::default(), Some(snap1), None)
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -291,11 +299,14 @@ mod pg_tests {
         };
         store.write(&[], &[delete_filter]).await.unwrap();
 
-        let after_delete = store.read(&TupleFilter::default(), None).await.unwrap();
+        let after_delete = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert!(after_delete.is_empty());
 
         let before_delete = store
-            .read(&TupleFilter::default(), Some(snap_before))
+            .read(&TupleFilter::default(), Some(snap_before), None)
             .await
             .unwrap();
         assert_eq!(before_delete.len(), 1);
@@ -334,7 +345,10 @@ mod pg_tests {
             .await
             .unwrap();
 
-        let results_b = store_b.read(&TupleFilter::default(), None).await.unwrap();
+        let results_b = store_b
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert!(results_b.is_empty());
     }
 

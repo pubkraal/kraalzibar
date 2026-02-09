@@ -94,6 +94,12 @@ impl RelationshipStore for InMemoryStore {
     ) -> Result<SnapshotToken, StorageError> {
         let mut state = self.state.lock().unwrap();
 
+        for filter in deletes {
+            if !filter.has_any_field() {
+                return Err(StorageError::EmptyDeleteFilter);
+            }
+        }
+
         for (i, w) in writes.iter().enumerate() {
             for other in &writes[i + 1..] {
                 if w == other {
@@ -148,6 +154,7 @@ impl RelationshipStore for InMemoryStore {
         &self,
         filter: &TupleFilter,
         snapshot: Option<SnapshotToken>,
+        limit: Option<usize>,
     ) -> Result<Vec<Tuple>, StorageError> {
         let state = self.state.lock().unwrap();
 
@@ -165,12 +172,16 @@ impl RelationshipStore for InMemoryStore {
             None => state.current_tx,
         };
 
-        let results = state
+        let iter = state
             .tuples
             .iter()
             .filter(|t| t.visible_at(snap) && t.matches_filter(filter))
-            .map(|t| t.to_tuple())
-            .collect();
+            .map(|t| t.to_tuple());
+
+        let results = match limit {
+            Some(n) => iter.take(n).collect(),
+            None => iter.collect(),
+        };
 
         Ok(results)
     }
@@ -279,7 +290,10 @@ mod tests {
             .await
             .unwrap();
 
-        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].object, ObjectRef::new("doc", "readme"));
@@ -302,7 +316,10 @@ mod tests {
             .await
             .unwrap();
 
-        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
 
         assert_eq!(results.len(), 2);
     }
@@ -326,7 +343,7 @@ mod tests {
             relation: Some("editor".to_string()),
             ..Default::default()
         };
-        let results = store.read(&filter, None).await.unwrap();
+        let results = store.read(&filter, None, None).await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].relation, "editor");
@@ -369,7 +386,7 @@ mod tests {
             .unwrap();
 
         let results = store
-            .read(&TupleFilter::default(), Some(snap1))
+            .read(&TupleFilter::default(), Some(snap1), None)
             .await
             .unwrap();
 
@@ -393,7 +410,10 @@ mod tests {
         };
         store.write(&[], &[delete_filter]).await.unwrap();
 
-        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
 
         assert!(results.is_empty());
     }
@@ -415,7 +435,7 @@ mod tests {
         store.write(&[], &[delete_filter]).await.unwrap();
 
         let results = store
-            .read(&TupleFilter::default(), Some(snap))
+            .read(&TupleFilter::default(), Some(snap), None)
             .await
             .unwrap();
 
@@ -449,7 +469,10 @@ mod tests {
 
         store.write(&[w], &[]).await.unwrap();
 
-        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -459,7 +482,7 @@ mod tests {
         let store = InMemoryStore::new();
 
         let result = store
-            .read(&TupleFilter::default(), Some(SnapshotToken::new(999)))
+            .read(&TupleFilter::default(), Some(SnapshotToken::new(999)), None)
             .await;
 
         assert!(matches!(result, Err(StorageError::SnapshotAhead { .. })));
@@ -488,14 +511,14 @@ mod tests {
             .unwrap();
 
         let at_before = store
-            .read(&TupleFilter::default(), Some(snap_before))
+            .read(&TupleFilter::default(), Some(snap_before), None)
             .await
             .unwrap();
         assert_eq!(at_before.len(), 1);
         assert_eq!(at_before[0].object.object_id, "1");
 
         let at_after = store
-            .read(&TupleFilter::default(), Some(snap_after))
+            .read(&TupleFilter::default(), Some(snap_after), None)
             .await
             .unwrap();
         assert_eq!(at_after.len(), 1);
@@ -521,7 +544,7 @@ mod tests {
             subject_relation: Some(None),
             ..Default::default()
         };
-        let results = store.read(&filter, None).await.unwrap();
+        let results = store.read(&filter, None, None).await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].subject.subject_relation, None);
@@ -546,7 +569,7 @@ mod tests {
             subject_relation: Some(Some("member".to_string())),
             ..Default::default()
         };
-        let results = store.read(&filter, None).await.unwrap();
+        let results = store.read(&filter, None, None).await.unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(
@@ -568,7 +591,10 @@ mod tests {
             .unwrap();
 
         let store2 = factory.for_tenant(&tenant);
-        let results = store2.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store2
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
 
         assert_eq!(results.len(), 1);
     }
@@ -588,7 +614,10 @@ mod tests {
             .await
             .unwrap();
 
-        let results_b = store_b.read(&TupleFilter::default(), None).await.unwrap();
+        let results_b = store_b
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
 
         assert!(results_b.is_empty());
     }
@@ -618,8 +647,14 @@ mod tests {
             .await
             .unwrap();
 
-        let results_a = store_a.read(&TupleFilter::default(), None).await.unwrap();
-        let results_b = store_b.read(&TupleFilter::default(), None).await.unwrap();
+        let results_a = store_a
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
+        let results_b = store_b
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
 
         assert_eq!(results_a.len(), 1);
         assert_eq!(results_b.len(), 2);
@@ -694,7 +729,42 @@ mod tests {
             .await;
         assert!(result.is_err());
 
-        let results = store.read(&TupleFilter::default(), None).await.unwrap();
+        let results = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn write_rejects_empty_delete_filter() {
+        let store = InMemoryStore::new();
+
+        let result = store.write(&[], &[TupleFilter::default()]).await;
+
+        assert!(matches!(result, Err(StorageError::EmptyDeleteFilter)));
+    }
+
+    #[tokio::test]
+    async fn read_with_limit_caps_results() {
+        let store = InMemoryStore::new();
+        store
+            .write(
+                &[
+                    make_write("doc", "1", "viewer", direct_user("a")),
+                    make_write("doc", "2", "viewer", direct_user("b")),
+                    make_write("doc", "3", "viewer", direct_user("c")),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let results = store
+            .read(&TupleFilter::default(), None, Some(2))
+            .await
+            .unwrap();
+
         assert_eq!(results.len(), 2);
     }
 

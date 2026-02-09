@@ -4,6 +4,8 @@ use kraalzibar_core::tuple::{SnapshotToken, TenantId, Tuple, TupleFilter, TupleW
 pub enum StorageError {
     #[error("duplicate tuple in write batch")]
     DuplicateTuple,
+    #[error("delete filter must have at least one field set")]
+    EmptyDeleteFilter,
     #[error("snapshot {requested} is ahead of current {current}")]
     SnapshotAhead { requested: u64, current: u64 },
     #[error("internal storage error: {0}")]
@@ -21,6 +23,7 @@ pub trait RelationshipStore: Send + Sync {
         &self,
         filter: &TupleFilter,
         snapshot: Option<SnapshotToken>,
+        limit: Option<usize>,
     ) -> impl Future<Output = Result<Vec<Tuple>, StorageError>> + Send;
 
     fn snapshot(&self) -> impl Future<Output = Result<SnapshotToken, StorageError>> + Send;
