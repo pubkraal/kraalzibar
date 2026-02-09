@@ -16,6 +16,16 @@ pub struct TypeDefinition {
     pub permissions: Vec<PermissionDef>,
 }
 
+impl TypeDefinition {
+    pub fn get_relation(&self, name: &str) -> Option<&RelationDef> {
+        self.relations.iter().find(|r| r.name == name)
+    }
+
+    pub fn get_permission(&self, name: &str) -> Option<&PermissionDef> {
+        self.permissions.iter().find(|p| p.name == name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationDef {
     pub name: String,
