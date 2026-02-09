@@ -104,6 +104,24 @@ impl<T: TupleReader> CheckEngine<T> {
                     }
                     Ok(false)
                 }
+                RewriteRule::Intersection(children) => {
+                    for child in children {
+                        if !self
+                            .evaluate_rule(
+                                child,
+                                object_type,
+                                object_id,
+                                subject_type,
+                                subject_id,
+                                snapshot,
+                            )
+                            .await?
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
                 _ => Ok(false),
             }
         })
@@ -423,6 +441,84 @@ mod tests {
     async fn check_union_denies_when_no_branch_matches() {
         let schema = doc_schema_with_union_view();
         let engine = make_engine(schema, vec![]);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(!result.allowed);
+    }
+
+    fn doc_schema_with_intersection() -> Schema {
+        Schema {
+            types: vec![TypeDefinition {
+                name: "document".to_string(),
+                relations: vec![
+                    RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    },
+                    RelationDef {
+                        name: "allowed_ip".to_string(),
+                        subject_types: vec![],
+                    },
+                ],
+                permissions: vec![PermissionDef {
+                    name: "view".to_string(),
+                    rule: RewriteRule::Intersection(vec![
+                        RewriteRule::This("viewer".to_string()),
+                        RewriteRule::This("allowed_ip".to_string()),
+                    ]),
+                }],
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn check_intersection_grants_when_all_match() {
+        let schema = doc_schema_with_intersection();
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            ),
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "allowed_ip",
+                SubjectRef::direct("user", "alice"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_intersection_denies_when_one_missing() {
+        let schema = doc_schema_with_intersection();
+        let tuples = vec![Tuple::new(
+            ObjectRef::new("document", "readme"),
+            "viewer",
+            SubjectRef::direct("user", "alice"),
+        )];
+        let engine = make_engine(schema, tuples);
 
         let request = CheckRequest {
             object_type: "document".to_string(),
