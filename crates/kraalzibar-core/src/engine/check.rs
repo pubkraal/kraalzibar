@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -21,16 +22,18 @@ pub struct CheckResult {
     pub allowed: bool,
 }
 
-struct CheckContext<'a> {
-    subject_type: &'a str,
-    subject_id: &'a str,
+#[derive(Clone)]
+struct CheckContext {
+    subject_type: String,
+    subject_id: String,
     snapshot: Option<SnapshotToken>,
+    depth: usize,
+    visited: HashSet<(String, String, String)>,
 }
 
 pub struct CheckEngine<T: TupleReader> {
     reader: Arc<T>,
     schema: Arc<Schema>,
-    #[allow(dead_code)]
     config: EngineConfig,
 }
 
@@ -57,9 +60,11 @@ impl<T: TupleReader> CheckEngine<T> {
             })?;
 
         let ctx = CheckContext {
-            subject_type: &request.subject_type,
-            subject_id: &request.subject_id,
+            subject_type: request.subject_type.clone(),
+            subject_id: request.subject_id.clone(),
             snapshot: request.snapshot,
+            depth: 0,
+            visited: HashSet::new(),
         };
 
         let allowed = self
@@ -67,7 +72,7 @@ impl<T: TupleReader> CheckEngine<T> {
                 &perm_def.rule,
                 &request.object_type,
                 &request.object_id,
-                &ctx,
+                ctx,
             )
             .await?;
 
@@ -79,17 +84,21 @@ impl<T: TupleReader> CheckEngine<T> {
         rule: &'a RewriteRule,
         object_type: &'a str,
         object_id: &'a str,
-        ctx: &'a CheckContext<'a>,
+        ctx: CheckContext,
     ) -> Pin<Box<dyn Future<Output = Result<bool, CheckError>> + Send + 'a>> {
         Box::pin(async move {
+            if ctx.depth > self.config.max_depth {
+                return Err(CheckError::MaxDepthExceeded(ctx.depth));
+            }
+
             match rule {
                 RewriteRule::This(name) => {
-                    self.evaluate_this(name, object_type, object_id, ctx).await
+                    self.evaluate_this(name, object_type, object_id, &ctx).await
                 }
                 RewriteRule::Union(children) => {
                     for child in children {
                         if self
-                            .evaluate_rule(child, object_type, object_id, ctx)
+                            .evaluate_rule(child, object_type, object_id, ctx.clone())
                             .await?
                         {
                             return Ok(true);
@@ -100,7 +109,7 @@ impl<T: TupleReader> CheckEngine<T> {
                 RewriteRule::Intersection(children) => {
                     for child in children {
                         if !self
-                            .evaluate_rule(child, object_type, object_id, ctx)
+                            .evaluate_rule(child, object_type, object_id, ctx.clone())
                             .await?
                         {
                             return Ok(false);
@@ -110,7 +119,7 @@ impl<T: TupleReader> CheckEngine<T> {
                 }
                 RewriteRule::Exclusion(base, excluded) => {
                     let base_result = self
-                        .evaluate_rule(base, object_type, object_id, ctx)
+                        .evaluate_rule(base, object_type, object_id, ctx.clone())
                         .await?;
                     if !base_result {
                         return Ok(false);
@@ -133,7 +142,7 @@ impl<T: TupleReader> CheckEngine<T> {
         name: &str,
         object_type: &str,
         object_id: &str,
-        ctx: &CheckContext<'_>,
+        ctx: &CheckContext,
     ) -> Result<bool, CheckError> {
         let type_def = self
             .schema
@@ -191,7 +200,7 @@ impl<T: TupleReader> CheckEngine<T> {
         computed_perm: &str,
         object_type: &str,
         object_id: &str,
-        ctx: &CheckContext<'_>,
+        ctx: CheckContext,
     ) -> Result<bool, CheckError> {
         let filter = TupleFilter {
             object_type: Some(object_type.to_string()),
@@ -206,6 +215,16 @@ impl<T: TupleReader> CheckEngine<T> {
             let target_type = &tuple.subject.subject_type;
             let target_id = &tuple.subject.subject_id;
 
+            let visit_key = (
+                target_type.clone(),
+                target_id.clone(),
+                computed_perm.to_string(),
+            );
+
+            if ctx.visited.contains(&visit_key) {
+                continue;
+            }
+
             let target_type_def = self
                 .schema
                 .get_type(target_type)
@@ -218,8 +237,12 @@ impl<T: TupleReader> CheckEngine<T> {
                     permission: computed_perm.to_string(),
                 })?;
 
+            let mut child_ctx = ctx.clone();
+            child_ctx.depth += 1;
+            child_ctx.visited.insert(visit_key);
+
             if self
-                .evaluate_rule(&perm_def.rule, target_type, target_id, ctx)
+                .evaluate_rule(&perm_def.rule, target_type, target_id, child_ctx)
                 .await?
             {
                 return Ok(true);
@@ -826,5 +849,157 @@ mod tests {
 
         let result = engine.check(&request).await.unwrap();
         assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_depth_limit_exceeded() {
+        // Create a chain of arrows that exceeds max depth (6)
+        // doc -> folder1 -> folder2 -> folder3 -> folder4 -> folder5 -> folder6 -> folder7
+        let schema = Schema {
+            types: vec![
+                TypeDefinition {
+                    name: "folder".to_string(),
+                    relations: vec![
+                        RelationDef {
+                            name: "parent".to_string(),
+                            subject_types: vec![],
+                        },
+                        RelationDef {
+                            name: "viewer".to_string(),
+                            subject_types: vec![],
+                        },
+                    ],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::Union(vec![
+                            RewriteRule::This("viewer".to_string()),
+                            RewriteRule::Arrow("parent".to_string(), "view".to_string()),
+                        ]),
+                    }],
+                },
+                TypeDefinition {
+                    name: "document".to_string(),
+                    relations: vec![RelationDef {
+                        name: "parent".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::Arrow("parent".to_string(), "view".to_string()),
+                    }],
+                },
+            ],
+        };
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "parent",
+                SubjectRef::direct("folder", "f1"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f1"),
+                "parent",
+                SubjectRef::direct("folder", "f2"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f2"),
+                "parent",
+                SubjectRef::direct("folder", "f3"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f3"),
+                "parent",
+                SubjectRef::direct("folder", "f4"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f4"),
+                "parent",
+                SubjectRef::direct("folder", "f5"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f5"),
+                "parent",
+                SubjectRef::direct("folder", "f6"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f6"),
+                "parent",
+                SubjectRef::direct("folder", "f7"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "f7"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let err = engine.check(&request).await.unwrap_err();
+        assert!(
+            matches!(err, CheckError::MaxDepthExceeded(_)),
+            "expected MaxDepthExceeded, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_cycle_returns_false_not_error() {
+        // Create a cycle: folder:a -> parent -> folder:b -> parent -> folder:a
+        let schema = Schema {
+            types: vec![TypeDefinition {
+                name: "folder".to_string(),
+                relations: vec![
+                    RelationDef {
+                        name: "parent".to_string(),
+                        subject_types: vec![],
+                    },
+                    RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    },
+                ],
+                permissions: vec![PermissionDef {
+                    name: "view".to_string(),
+                    rule: RewriteRule::Union(vec![
+                        RewriteRule::This("viewer".to_string()),
+                        RewriteRule::Arrow("parent".to_string(), "view".to_string()),
+                    ]),
+                }],
+            }],
+        };
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("folder", "a"),
+                "parent",
+                SubjectRef::direct("folder", "b"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "b"),
+                "parent",
+                SubjectRef::direct("folder", "a"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "folder".to_string(),
+            object_id: "a".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        // Should return false (no access), NOT an error
+        let result = engine.check(&request).await.unwrap();
+        assert!(!result.allowed);
     }
 }
