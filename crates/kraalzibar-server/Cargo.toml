@@ -11,13 +11,19 @@ path = "src/main.rs"
 kraalzibar-core = { path = "../kraalzibar-core" }
 kraalzibar-storage = { path = "../kraalzibar-storage" }
 prost = "0.13"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
+toml = "0.8"
 tonic = "0.12"
+tonic-health = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
 tonic = { version = "0.12", features = ["transport"] }
 
 [build-dependencies]
