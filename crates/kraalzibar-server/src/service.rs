@@ -71,11 +71,23 @@ pub struct WriteSchemaOutput {
     pub breaking_changes_overridden: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CheckCacheKey {
+    tenant_id: TenantId,
+    object_type: String,
+    object_id: String,
+    permission: String,
+    subject_type: String,
+    subject_id: String,
+    snapshot: SnapshotToken,
+}
+
 pub struct AuthzService<F: StoreFactory> {
     factory: Arc<F>,
     engine_config: EngineConfig,
     schema_limits: SchemaLimits,
     schema_cache: moka::future::Cache<TenantId, Arc<Schema>>,
+    check_cache: moka::future::Cache<CheckCacheKey, bool>,
 }
 
 impl<F: StoreFactory> AuthzService<F>
@@ -101,11 +113,16 @@ where
             .max_capacity(cache_config.schema_cache_capacity)
             .time_to_live(Duration::from_secs(cache_config.schema_cache_ttl_seconds))
             .build();
+        let check_cache = moka::future::Cache::builder()
+            .max_capacity(cache_config.check_cache_capacity)
+            .time_to_live(Duration::from_secs(cache_config.check_cache_ttl_seconds))
+            .build();
         Self {
             factory,
             engine_config,
             schema_limits,
             schema_cache,
+            check_cache,
         }
     }
 
@@ -118,25 +135,66 @@ where
         let store = Arc::new(store);
 
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
-        let schema = self.load_schema_cached(tenant_id, &*store).await?;
 
-        let reader = StoreTupleReader::new(Arc::clone(&store));
-        let engine = CheckEngine::new(Arc::new(reader), schema, self.engine_config.clone());
+        // Only cache when we have an explicit snapshot token
+        if let Some(snap) = snapshot {
+            let cache_key = CheckCacheKey {
+                tenant_id: tenant_id.clone(),
+                object_type: input.object_type.clone(),
+                object_id: input.object_id.clone(),
+                permission: input.permission.clone(),
+                subject_type: input.subject_type.clone(),
+                subject_id: input.subject_id.clone(),
+                snapshot: snap,
+            };
 
-        let request = CheckRequest {
-            object_type: input.object_type,
-            object_id: input.object_id,
-            permission: input.permission,
-            subject_type: input.subject_type,
-            subject_id: input.subject_id,
-            snapshot,
-        };
+            if let Some(cached_allowed) = self.check_cache.get(&cache_key).await {
+                return Ok(CheckPermissionOutput {
+                    allowed: cached_allowed,
+                    snapshot,
+                });
+            }
 
-        let result: CheckResult = engine.check(&request).await?;
-        Ok(CheckPermissionOutput {
-            allowed: result.allowed,
-            snapshot,
-        })
+            let schema = self.load_schema_cached(tenant_id, &*store).await?;
+            let reader = StoreTupleReader::new(Arc::clone(&store));
+            let engine = CheckEngine::new(Arc::new(reader), schema, self.engine_config.clone());
+
+            let request = CheckRequest {
+                object_type: input.object_type,
+                object_id: input.object_id,
+                permission: input.permission,
+                subject_type: input.subject_type,
+                subject_id: input.subject_id,
+                snapshot,
+            };
+
+            let result: CheckResult = engine.check(&request).await?;
+            self.check_cache.insert(cache_key, result.allowed).await;
+            Ok(CheckPermissionOutput {
+                allowed: result.allowed,
+                snapshot,
+            })
+        } else {
+            // No snapshot — don't cache
+            let schema = self.load_schema_cached(tenant_id, &*store).await?;
+            let reader = StoreTupleReader::new(Arc::clone(&store));
+            let engine = CheckEngine::new(Arc::new(reader), schema, self.engine_config.clone());
+
+            let request = CheckRequest {
+                object_type: input.object_type,
+                object_id: input.object_id,
+                permission: input.permission,
+                subject_type: input.subject_type,
+                subject_id: input.subject_id,
+                snapshot,
+            };
+
+            let result: CheckResult = engine.check(&request).await?;
+            Ok(CheckPermissionOutput {
+                allowed: result.allowed,
+                snapshot,
+            })
+        }
     }
 
     pub async fn expand_permission_tree(
@@ -170,7 +228,9 @@ where
         deletes: &[TupleFilter],
     ) -> Result<SnapshotToken, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
-        Ok(store.write(writes, deletes).await?)
+        let token = store.write(writes, deletes).await?;
+        self.check_cache.invalidate_all();
+        Ok(token)
     }
 
     pub async fn read_relationships(
@@ -214,6 +274,7 @@ where
 
         store.write_schema(definition).await?;
         self.schema_cache.invalidate(tenant_id).await;
+        self.check_cache.invalidate_all();
 
         Ok(WriteSchemaOutput {
             breaking_changes_overridden,
@@ -381,11 +442,12 @@ mod tests {
     };
     use kraalzibar_storage::traits::{RelationshipStore as RS, SchemaStore as SS, StorageError};
 
-    /// A store wrapper that delegates to an inner store and counts read_schema calls.
+    /// A store wrapper that delegates to an inner store and counts read_schema/read calls.
     #[derive(Clone)]
     struct CountingStore {
         inner: kraalzibar_storage::InMemoryStore,
         read_schema_count: Arc<AtomicU64>,
+        read_tuples_count: Arc<AtomicU64>,
     }
 
     impl RS for CountingStore {
@@ -398,6 +460,7 @@ mod tests {
             snapshot: Option<ST>,
             limit: Option<usize>,
         ) -> Result<Vec<T>, StorageError> {
+            self.read_tuples_count.fetch_add(1, Ordering::SeqCst);
             self.inner.read(filter, snapshot, limit).await
         }
         async fn snapshot(&self) -> Result<ST, StorageError> {
@@ -418,6 +481,7 @@ mod tests {
     struct CountingStoreFactory {
         inner: InMemoryStoreFactory,
         read_schema_count: Arc<AtomicU64>,
+        read_tuples_count: Arc<AtomicU64>,
     }
 
     impl CountingStoreFactory {
@@ -425,11 +489,16 @@ mod tests {
             Self {
                 inner: InMemoryStoreFactory::new(),
                 read_schema_count: Arc::new(AtomicU64::new(0)),
+                read_tuples_count: Arc::new(AtomicU64::new(0)),
             }
         }
 
         fn read_schema_count(&self) -> u64 {
             self.read_schema_count.load(Ordering::SeqCst)
+        }
+
+        fn read_tuples_count(&self) -> u64 {
+            self.read_tuples_count.load(Ordering::SeqCst)
         }
     }
 
@@ -440,6 +509,7 @@ mod tests {
             CountingStore {
                 inner: self.inner.for_tenant(tenant_id),
                 read_schema_count: Arc::clone(&self.read_schema_count),
+                read_tuples_count: Arc::clone(&self.read_tuples_count),
             }
         }
     }
@@ -1128,6 +1198,375 @@ mod tests {
         assert!(
             result_cross.is_err(),
             "tenant A should not have folder schema"
+        );
+    }
+
+    // --- 4B: Check Result Cache Tests ---
+
+    fn make_check_input(
+        object_type: &str,
+        object_id: &str,
+        permission: &str,
+        subject_type: &str,
+        subject_id: &str,
+        consistency: Consistency,
+    ) -> CheckPermissionInput {
+        CheckPermissionInput {
+            object_type: object_type.to_string(),
+            object_id: object_id.to_string(),
+            permission: permission.to_string(),
+            subject_type: subject_type.to_string(),
+            subject_id: subject_id.to_string(),
+            consistency,
+        }
+    }
+
+    #[tokio::test]
+    async fn check_cache_returns_cached_result() {
+        let (service, tenant_id, factory) = make_counting_service();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+        let token = write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        // First check with explicit snapshot — runs engine
+        let result1 = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result1.allowed);
+
+        let reads_after_first = factory.read_tuples_count();
+
+        // Second check with same snapshot — should return cached, no new tuple reads
+        let result2 = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result2.allowed);
+
+        assert_eq!(
+            factory.read_tuples_count(),
+            reads_after_first,
+            "second check should use cached result without reading tuples"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_cache_skips_without_snapshot() {
+        let (service, tenant_id, factory) = make_counting_service();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        // MinimizeLatency — snapshot is None, should NOT cache
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::MinimizeLatency,
+                ),
+            )
+            .await
+            .unwrap();
+
+        let reads_after_first = factory.read_tuples_count();
+
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::MinimizeLatency,
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            factory.read_tuples_count() > reads_after_first,
+            "MinimizeLatency should not use check cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_cache_invalidated_on_write_relationships() {
+        let (service, tenant_id, _factory) = make_counting_service();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        let token = write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        // Populate cache
+        let result = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result.allowed);
+
+        // Write new relationship — should invalidate check cache
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "editor", "user", "bob",
+        )
+        .await;
+
+        // Check with the OLD token — must still work correctly
+        // (cache was invalidated, so it re-runs the engine)
+        let result2 = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result2.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_cache_invalidated_on_write_schema() {
+        let (service, tenant_id, _factory) = make_counting_service();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        let token = write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        // Populate check cache
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+
+        // Write schema — should invalidate check cache
+        service
+            .write_schema(&tenant_id, SCHEMA, true)
+            .await
+            .unwrap();
+
+        // The check should still work (cache invalidated, re-runs engine)
+        let result = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_cache_isolated_per_tenant() {
+        let (service, tenant_id_a, factory) = make_counting_service();
+        let tenant_id_b = TenantId::new(uuid::Uuid::new_v4());
+
+        service
+            .write_schema(&tenant_id_a, SCHEMA, false)
+            .await
+            .unwrap();
+        service
+            .write_schema(&tenant_id_b, SCHEMA, false)
+            .await
+            .unwrap();
+
+        let token_a = write_tuple(
+            &service,
+            &tenant_id_a,
+            "document",
+            "readme",
+            "viewer",
+            "user",
+            "alice",
+        )
+        .await;
+
+        // Tenant A check — allowed
+        let result_a = service
+            .check_permission(
+                &tenant_id_a,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token_a),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result_a.allowed);
+
+        // Get a snapshot for tenant B (which has no tuples)
+        let store_b = factory.inner.for_tenant(&tenant_id_b);
+        let token_b = store_b.snapshot().await.unwrap();
+
+        // Tenant B check for same params — should be denied (no tuples)
+        let result_b = service
+            .check_permission(
+                &tenant_id_b,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token_b),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(!result_b.allowed, "tenant B should not see tenant A tuples");
+    }
+
+    #[tokio::test]
+    async fn check_cache_different_snapshots_are_separate() {
+        let (service, tenant_id, _factory) = make_counting_service();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        // snapshot 1: no viewer tuple, so check should be denied
+        let store = _factory.inner.for_tenant(&tenant_id);
+        let snap1 = store.snapshot().await.unwrap();
+        let result1 = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(snap1),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(!result1.allowed);
+
+        // Write tuple, get snapshot 2
+        let snap2 = write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        // snapshot 2: viewer tuple exists, check should be allowed
+        let result2 = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(snap2),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result2.allowed);
+
+        // Re-check at snapshot 1 — should still be denied (cached separately)
+        let result1_again = service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(snap1),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !result1_again.allowed,
+            "snapshot 1 result should be cached as denied"
         );
     }
 }

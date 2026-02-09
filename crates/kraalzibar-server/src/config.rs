@@ -61,6 +61,8 @@ pub struct LogConfig {
 pub struct CacheConfig {
     pub schema_cache_capacity: u64,
     pub schema_cache_ttl_seconds: u64,
+    pub check_cache_capacity: u64,
+    pub check_cache_ttl_seconds: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -122,6 +124,8 @@ impl Default for CacheConfig {
         Self {
             schema_cache_capacity: 1000,
             schema_cache_ttl_seconds: 30,
+            check_cache_capacity: 10_000,
+            check_cache_ttl_seconds: 300,
         }
     }
 }
@@ -243,6 +247,16 @@ impl AppConfig {
         if self.cache.schema_cache_ttl_seconds == 0 {
             return Err(ConfigError::Validation(
                 "cache.schema_cache_ttl_seconds must be non-zero".to_string(),
+            ));
+        }
+        if self.cache.check_cache_capacity == 0 {
+            return Err(ConfigError::Validation(
+                "cache.check_cache_capacity must be non-zero".to_string(),
+            ));
+        }
+        if self.cache.check_cache_ttl_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "cache.check_cache_ttl_seconds must be non-zero".to_string(),
             ));
         }
         Ok(())
@@ -401,11 +415,15 @@ port = 9090
 [cache]
 schema_cache_capacity = 500
 schema_cache_ttl_seconds = 60
+check_cache_capacity = 5000
+check_cache_ttl_seconds = 120
 "#;
         let config: AppConfig = toml::from_str(toml_str).unwrap();
 
         assert_eq!(config.cache.schema_cache_capacity, 500);
         assert_eq!(config.cache.schema_cache_ttl_seconds, 60);
+        assert_eq!(config.cache.check_cache_capacity, 5000);
+        assert_eq!(config.cache.check_cache_ttl_seconds, 120);
     }
 
     #[test]
