@@ -21,6 +21,12 @@ pub struct CheckResult {
     pub allowed: bool,
 }
 
+struct CheckContext<'a> {
+    subject_type: &'a str,
+    subject_id: &'a str,
+    snapshot: Option<SnapshotToken>,
+}
+
 pub struct CheckEngine<T: TupleReader> {
     reader: Arc<T>,
     schema: Arc<Schema>,
@@ -50,14 +56,18 @@ impl<T: TupleReader> CheckEngine<T> {
                 permission: request.permission.clone(),
             })?;
 
+        let ctx = CheckContext {
+            subject_type: &request.subject_type,
+            subject_id: &request.subject_id,
+            snapshot: request.snapshot,
+        };
+
         let allowed = self
             .evaluate_rule(
                 &perm_def.rule,
                 &request.object_type,
                 &request.object_id,
-                &request.subject_type,
-                &request.subject_id,
-                request.snapshot,
+                &ctx,
             )
             .await?;
 
@@ -69,34 +79,17 @@ impl<T: TupleReader> CheckEngine<T> {
         rule: &'a RewriteRule,
         object_type: &'a str,
         object_id: &'a str,
-        subject_type: &'a str,
-        subject_id: &'a str,
-        snapshot: Option<SnapshotToken>,
+        ctx: &'a CheckContext<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, CheckError>> + Send + 'a>> {
         Box::pin(async move {
             match rule {
                 RewriteRule::This(name) => {
-                    self.evaluate_this(
-                        name,
-                        object_type,
-                        object_id,
-                        subject_type,
-                        subject_id,
-                        snapshot,
-                    )
-                    .await
+                    self.evaluate_this(name, object_type, object_id, ctx).await
                 }
                 RewriteRule::Union(children) => {
                     for child in children {
                         if self
-                            .evaluate_rule(
-                                child,
-                                object_type,
-                                object_id,
-                                subject_type,
-                                subject_id,
-                                snapshot,
-                            )
+                            .evaluate_rule(child, object_type, object_id, ctx)
                             .await?
                         {
                             return Ok(true);
@@ -107,14 +100,7 @@ impl<T: TupleReader> CheckEngine<T> {
                 RewriteRule::Intersection(children) => {
                     for child in children {
                         if !self
-                            .evaluate_rule(
-                                child,
-                                object_type,
-                                object_id,
-                                subject_type,
-                                subject_id,
-                                snapshot,
-                            )
+                            .evaluate_rule(child, object_type, object_id, ctx)
                             .await?
                         {
                             return Ok(false);
@@ -124,31 +110,20 @@ impl<T: TupleReader> CheckEngine<T> {
                 }
                 RewriteRule::Exclusion(base, excluded) => {
                     let base_result = self
-                        .evaluate_rule(
-                            base,
-                            object_type,
-                            object_id,
-                            subject_type,
-                            subject_id,
-                            snapshot,
-                        )
+                        .evaluate_rule(base, object_type, object_id, ctx)
                         .await?;
                     if !base_result {
                         return Ok(false);
                     }
                     let excluded_result = self
-                        .evaluate_rule(
-                            excluded,
-                            object_type,
-                            object_id,
-                            subject_type,
-                            subject_id,
-                            snapshot,
-                        )
+                        .evaluate_rule(excluded, object_type, object_id, ctx)
                         .await?;
                     Ok(!excluded_result)
                 }
-                _ => Ok(false),
+                RewriteRule::Arrow(tupleset_rel, computed_perm) => {
+                    self.evaluate_arrow(tupleset_rel, computed_perm, object_type, object_id, ctx)
+                        .await
+                }
             }
         })
     }
@@ -158,9 +133,7 @@ impl<T: TupleReader> CheckEngine<T> {
         name: &str,
         object_type: &str,
         object_id: &str,
-        subject_type: &str,
-        subject_id: &str,
-        snapshot: Option<SnapshotToken>,
+        ctx: &CheckContext<'_>,
     ) -> Result<bool, CheckError> {
         let type_def = self
             .schema
@@ -175,12 +148,12 @@ impl<T: TupleReader> CheckEngine<T> {
                 ..Default::default()
             };
 
-            let tuples = self.reader.read_tuples(&filter, snapshot).await?;
+            let tuples = self.reader.read_tuples(&filter, ctx.snapshot).await?;
 
             for tuple in &tuples {
                 if tuple.subject.subject_relation.is_none()
-                    && tuple.subject.subject_type == subject_type
-                    && tuple.subject.subject_id == subject_id
+                    && tuple.subject.subject_type == ctx.subject_type
+                    && tuple.subject.subject_id == ctx.subject_id
                 {
                     return Ok(true);
                 }
@@ -193,6 +166,50 @@ impl<T: TupleReader> CheckEngine<T> {
             type_name: object_type.to_string(),
             relation: name.to_string(),
         })
+    }
+
+    async fn evaluate_arrow(
+        &self,
+        tupleset_rel: &str,
+        computed_perm: &str,
+        object_type: &str,
+        object_id: &str,
+        ctx: &CheckContext<'_>,
+    ) -> Result<bool, CheckError> {
+        let filter = TupleFilter {
+            object_type: Some(object_type.to_string()),
+            object_id: Some(object_id.to_string()),
+            relation: Some(tupleset_rel.to_string()),
+            ..Default::default()
+        };
+
+        let tuples = self.reader.read_tuples(&filter, ctx.snapshot).await?;
+
+        for tuple in &tuples {
+            let target_type = &tuple.subject.subject_type;
+            let target_id = &tuple.subject.subject_id;
+
+            let target_type_def = self
+                .schema
+                .get_type(target_type)
+                .ok_or_else(|| CheckError::TypeNotFound(target_type.clone()))?;
+
+            let perm_def = target_type_def
+                .get_permission(computed_perm)
+                .ok_or_else(|| CheckError::PermissionNotFound {
+                    type_name: target_type.clone(),
+                    permission: computed_perm.to_string(),
+                })?;
+
+            if self
+                .evaluate_rule(&perm_def.rule, target_type, target_id, ctx)
+                .await?
+            {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 }
 
@@ -236,6 +253,7 @@ mod tests {
         )
     }
 
+    #[allow(dead_code)]
     fn simple_schema_with_permission(
         type_name: &str,
         permission_name: &str,
@@ -641,6 +659,88 @@ mod tests {
     async fn check_exclusion_denies_when_base_false() {
         let schema = doc_schema_with_exclusion();
         let engine = make_engine(schema, vec![]);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(!result.allowed);
+    }
+
+    fn doc_and_folder_schema() -> Schema {
+        Schema {
+            types: vec![
+                TypeDefinition {
+                    name: "folder".to_string(),
+                    relations: vec![RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::This("viewer".to_string()),
+                    }],
+                },
+                TypeDefinition {
+                    name: "document".to_string(),
+                    relations: vec![RelationDef {
+                        name: "parent".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::Arrow("parent".to_string(), "view".to_string()),
+                    }],
+                },
+            ],
+        }
+    }
+
+    #[tokio::test]
+    async fn check_arrow_follows_relation_to_parent() {
+        let schema = doc_and_folder_schema();
+        let tuples = vec![
+            Tuple::new(
+                ObjectRef::new("document", "readme"),
+                "parent",
+                SubjectRef::direct("folder", "root"),
+            ),
+            Tuple::new(
+                ObjectRef::new("folder", "root"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            ),
+        ];
+        let engine = make_engine(schema, tuples);
+
+        let request = CheckRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            snapshot: None,
+        };
+
+        let result = engine.check(&request).await.unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_arrow_denies_when_parent_denies() {
+        let schema = doc_and_folder_schema();
+        let tuples = vec![Tuple::new(
+            ObjectRef::new("document", "readme"),
+            "parent",
+            SubjectRef::direct("folder", "root"),
+        )];
+        let engine = make_engine(schema, tuples);
 
         let request = CheckRequest {
             object_type: "document".to_string(),
