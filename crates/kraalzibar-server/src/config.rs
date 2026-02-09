@@ -32,6 +32,10 @@ pub struct RestConfig {
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
+    pub min_connections: u32,
+    pub acquire_timeout_seconds: u64,
+    pub idle_timeout_seconds: u64,
+    pub max_lifetime_seconds: u64,
 }
 
 impl std::fmt::Debug for DatabaseConfig {
@@ -39,6 +43,10 @@ impl std::fmt::Debug for DatabaseConfig {
         f.debug_struct("DatabaseConfig")
             .field("url", &"[REDACTED]")
             .field("max_connections", &self.max_connections)
+            .field("min_connections", &self.min_connections)
+            .field("acquire_timeout_seconds", &self.acquire_timeout_seconds)
+            .field("idle_timeout_seconds", &self.idle_timeout_seconds)
+            .field("max_lifetime_seconds", &self.max_lifetime_seconds)
             .finish()
     }
 }
@@ -105,6 +113,10 @@ impl Default for DatabaseConfig {
         Self {
             url: "postgresql://localhost:5432/kraalzibar".to_string(),
             max_connections: 10,
+            min_connections: 0,
+            acquire_timeout_seconds: 30,
+            idle_timeout_seconds: 600,
+            max_lifetime_seconds: 1800,
         }
     }
 }
@@ -194,6 +206,26 @@ impl AppConfig {
         {
             self.database.max_connections = n;
         }
+        if let Some(v) = env("KRAALZIBAR_DATABASE_MIN_CONNECTIONS")
+            && let Ok(n) = v.parse()
+        {
+            self.database.min_connections = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_DATABASE_ACQUIRE_TIMEOUT")
+            && let Ok(n) = v.parse()
+        {
+            self.database.acquire_timeout_seconds = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_DATABASE_IDLE_TIMEOUT")
+            && let Ok(n) = v.parse()
+        {
+            self.database.idle_timeout_seconds = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_DATABASE_MAX_LIFETIME")
+            && let Ok(n) = v.parse()
+        {
+            self.database.max_lifetime_seconds = n;
+        }
         if let Some(v) = env("KRAALZIBAR_ENGINE_MAX_DEPTH")
             && let Ok(n) = v.parse()
         {
@@ -230,6 +262,21 @@ impl AppConfig {
         if self.database.max_connections == 0 {
             return Err(ConfigError::Validation(
                 "database.max_connections must be non-zero".to_string(),
+            ));
+        }
+        if self.database.acquire_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "database.acquire_timeout_seconds must be non-zero".to_string(),
+            ));
+        }
+        if self.database.idle_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "database.idle_timeout_seconds must be non-zero".to_string(),
+            ));
+        }
+        if self.database.max_lifetime_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "database.max_lifetime_seconds must be non-zero".to_string(),
             ));
         }
         if self.engine.max_concurrent_branches == 0 {
@@ -454,7 +501,7 @@ check_cache_ttl_seconds = 120
     fn database_config_debug_redacts_url() {
         let config = DatabaseConfig {
             url: "postgresql://user:secret_password@host:5432/db".to_string(),
-            max_connections: 10,
+            ..Default::default()
         };
 
         let debug_output = format!("{config:?}");
@@ -483,5 +530,66 @@ check_cache_ttl_seconds = 120
 
         assert_eq!(config.grpc.port, 9999);
         assert_eq!(config.rest.port, 7777);
+    }
+
+    #[test]
+    fn database_config_pool_tuning_defaults() {
+        let config = DatabaseConfig::default();
+
+        assert_eq!(config.min_connections, 0);
+        assert_eq!(config.acquire_timeout_seconds, 30);
+        assert_eq!(config.idle_timeout_seconds, 600);
+        assert_eq!(config.max_lifetime_seconds, 1800);
+    }
+
+    #[test]
+    fn database_config_pool_tuning_from_toml() {
+        let toml_str = r#"
+[database]
+url = "postgresql://localhost/test"
+max_connections = 20
+min_connections = 5
+acquire_timeout_seconds = 10
+idle_timeout_seconds = 300
+max_lifetime_seconds = 900
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.database.max_connections, 20);
+        assert_eq!(config.database.min_connections, 5);
+        assert_eq!(config.database.acquire_timeout_seconds, 10);
+        assert_eq!(config.database.idle_timeout_seconds, 300);
+        assert_eq!(config.database.max_lifetime_seconds, 900);
+    }
+
+    #[test]
+    fn database_config_validates_pool_settings() {
+        let mut config = AppConfig::default();
+        config.database.acquire_timeout_seconds = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("acquire_timeout_seconds"))
+        );
+    }
+
+    #[test]
+    fn database_config_env_overrides_pool_settings() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_DATABASE_MIN_CONNECTIONS" => Some("3".to_string()),
+                "KRAALZIBAR_DATABASE_ACQUIRE_TIMEOUT" => Some("15".to_string()),
+                "KRAALZIBAR_DATABASE_IDLE_TIMEOUT" => Some("120".to_string()),
+                "KRAALZIBAR_DATABASE_MAX_LIFETIME" => Some("600".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.database.min_connections, 3);
+        assert_eq!(config.database.acquire_timeout_seconds, 15);
+        assert_eq!(config.database.idle_timeout_seconds, 120);
+        assert_eq!(config.database.max_lifetime_seconds, 600);
     }
 }
