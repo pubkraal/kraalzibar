@@ -4,11 +4,13 @@ use std::sync::Arc;
 use kraalzibar_server::config::{AppConfig, LogFormat};
 use kraalzibar_server::grpc::{PermissionServiceImpl, RelationshipServiceImpl, SchemaServiceImpl};
 use kraalzibar_server::health::create_health_service;
+use kraalzibar_server::metrics::{self, Metrics};
 use kraalzibar_server::proto::kraalzibar::v1::{
     permission_service_server::PermissionServiceServer,
     relationship_service_server::RelationshipServiceServer,
     schema_service_server::SchemaServiceServer,
 };
+use kraalzibar_server::rest;
 use kraalzibar_server::service::AuthzService;
 use kraalzibar_storage::InMemoryStoreFactory;
 
@@ -44,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(
         grpc_addr = %config.grpc_addr(),
+        rest_addr = %config.rest_addr(),
         "starting kraalzibar server"
     );
 
@@ -54,7 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.to_schema_limits(),
     ));
 
-    // TODO: Replace with tenant resolution from auth middleware in Phase 3.4
+    let metrics = Arc::new(Metrics::new());
+
+    // TODO: Replace with tenant resolution from auth middleware
     let tenant_id = TenantId::new(uuid::Uuid::nil());
 
     let (mut health_reporter, health_service) = create_health_service();
@@ -62,7 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_serving::<tonic_health::pb::health_server::HealthServer<tonic_health::server::HealthService>>()
         .await;
 
-    let addr = config.grpc_addr().parse()?;
+    let grpc_addr = config.grpc_addr().parse()?;
+    let rest_addr: std::net::SocketAddr = config.rest_addr().parse()?;
 
     let permission_svc = PermissionServiceServer::new(PermissionServiceImpl::new(
         Arc::clone(&service),
@@ -72,18 +78,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&service),
         tenant_id.clone(),
     ));
-    let schema_svc =
-        SchemaServiceServer::new(SchemaServiceImpl::new(Arc::clone(&service), tenant_id));
+    let schema_svc = SchemaServiceServer::new(SchemaServiceImpl::new(
+        Arc::clone(&service),
+        tenant_id.clone(),
+    ));
 
-    tracing::info!(%addr, "gRPC server listening");
+    // REST server with metrics endpoint
+    let rest_state = rest::AppState {
+        service: Arc::clone(&service),
+        tenant_id,
+    };
+    let rest_router = rest::create_router(rest_state).route(
+        "/metrics",
+        axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
+    );
 
-    tonic::transport::Server::builder()
+    tracing::info!(%grpc_addr, "gRPC server listening");
+    tracing::info!(%rest_addr, "REST server listening");
+
+    let grpc_server = tonic::transport::Server::builder()
         .add_service(health_service)
         .add_service(permission_svc)
         .add_service(relationship_svc)
         .add_service(schema_svc)
-        .serve_with_shutdown(addr, shutdown_signal())
-        .await?;
+        .serve_with_shutdown(grpc_addr, shutdown_signal());
+
+    let rest_listener = tokio::net::TcpListener::bind(rest_addr).await?;
+    let rest_server = axum::serve(rest_listener, rest_router);
+
+    tokio::select! {
+        result = grpc_server => {
+            if let Err(e) = result {
+                tracing::error!(error = %e, "gRPC server error");
+            }
+        }
+        result = rest_server => {
+            if let Err(e) = result {
+                tracing::error!(error = %e, "REST server error");
+            }
+        }
+    }
 
     tracing::info!("server shut down gracefully");
     Ok(())

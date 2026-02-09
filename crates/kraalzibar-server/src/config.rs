@@ -5,6 +5,7 @@ use std::path::Path;
 #[serde(default)]
 pub struct AppConfig {
     pub grpc: GrpcConfig,
+    pub rest: RestConfig,
     pub database: DatabaseConfig,
     pub engine: EngineConfigValues,
     pub schema_limits: SchemaLimitsConfig,
@@ -14,6 +15,13 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct GrpcConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RestConfig {
     pub host: String,
     pub port: u16,
 }
@@ -60,6 +68,15 @@ impl Default for GrpcConfig {
         Self {
             host: "0.0.0.0".to_string(),
             port: 50051,
+        }
+    }
+}
+
+impl Default for RestConfig {
+    fn default() -> Self {
+        Self {
+            host: "0.0.0.0".to_string(),
+            port: 8080,
         }
     }
 }
@@ -127,6 +144,14 @@ impl AppConfig {
         {
             self.grpc.port = port;
         }
+        if let Ok(v) = std::env::var("KRAALZIBAR_REST_HOST") {
+            self.rest.host = v;
+        }
+        if let Ok(v) = std::env::var("KRAALZIBAR_REST_PORT")
+            && let Ok(port) = v.parse()
+        {
+            self.rest.port = port;
+        }
         if let Ok(v) = std::env::var("KRAALZIBAR_DATABASE_URL") {
             self.database.url = v;
         }
@@ -156,6 +181,11 @@ impl AppConfig {
         if self.grpc.port == 0 {
             return Err(ConfigError::Validation(
                 "grpc.port must be non-zero".to_string(),
+            ));
+        }
+        if self.rest.port == 0 {
+            return Err(ConfigError::Validation(
+                "rest.port must be non-zero".to_string(),
             ));
         }
         if self.engine.max_depth == 0 {
@@ -188,6 +218,10 @@ impl AppConfig {
 
     pub fn grpc_addr(&self) -> String {
         format!("{}:{}", self.grpc.host, self.grpc.port)
+    }
+
+    pub fn rest_addr(&self) -> String {
+        format!("{}:{}", self.rest.host, self.rest.port)
     }
 }
 

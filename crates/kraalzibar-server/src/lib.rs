@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod grpc;
 pub mod health;
+pub mod metrics;
 pub mod proto;
 pub mod rest;
 pub mod service;

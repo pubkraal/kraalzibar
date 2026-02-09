@@ -5,6 +5,10 @@
 host = "0.0.0.0"
 port = 50051
 
+[rest]
+host = "0.0.0.0"
+port = 8080
+
 [database]
 # Override with KRAALZIBAR_DATABASE_URL env var
 url = "postgresql://localhost:5432/kraalzibar"
