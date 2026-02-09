@@ -108,6 +108,12 @@ All design and implementation must adhere to the
 - **Engine limits**: Max depth 6, schema caps (50 types, 30 relations, 30
   permissions per type), lookup limit 1000
 
+## README Maintenance
+
+Keep `README.md` up to date as the project evolves. When adding new
+functionality, update the Getting Started section with build, run, and
+configuration instructions as they become available.
+
 ## Gotchas and Learnings
 
 Update this section as the project progresses with things you wish you knew
