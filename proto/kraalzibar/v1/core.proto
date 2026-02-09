@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package kraalzibar.v1;
+
+message ObjectReference {
+  string object_type = 1;
+  string object_id = 2;
+}
+
+message SubjectReference {
+  string subject_type = 1;
+  string subject_id = 2;
+  optional string subject_relation = 3;
+}
+
+message Relationship {
+  ObjectReference object = 1;
+  string relation = 2;
+  SubjectReference subject = 3;
+}
+
+message RelationshipUpdate {
+  enum Operation {
+    OPERATION_UNSPECIFIED = 0;
+    OPERATION_TOUCH = 1;
+    OPERATION_DELETE = 2;
+  }
+
+  Operation operation = 1;
+  Relationship relationship = 2;
+}
+
+message ZedToken {
+  string token = 1;
+}
+
+message Consistency {
+  oneof requirement {
+    bool full_consistency = 1;
+    bool minimize_latency = 2;
+    ZedToken at_least_as_fresh = 3;
+    ZedToken at_exact_snapshot = 4;
+  }
+}
+
+message RelationshipFilter {
+  optional string object_type = 1;
+  optional string object_id = 2;
+  optional string relation = 3;
+  optional string subject_type = 4;
+  optional string subject_id = 5;
+}
+
+message PermissionExpansionTree {
+  oneof node {
+    LeafNode leaf = 1;
+    IntermediateNode intermediate = 2;
+  }
+
+  message LeafNode {
+    SubjectReference subject = 1;
+  }
+
+  message IntermediateNode {
+    enum Operation {
+      OPERATION_UNSPECIFIED = 0;
+      OPERATION_UNION = 1;
+      OPERATION_INTERSECTION = 2;
+      OPERATION_EXCLUSION = 3;
+    }
+
+    Operation operation = 1;
+    repeated PermissionExpansionTree children = 2;
+  }
+}

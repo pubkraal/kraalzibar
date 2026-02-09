@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package kraalzibar.v1;
+
+import "kraalzibar/v1/core.proto";
+
+service SchemaService {
+  rpc WriteSchema(WriteSchemaRequest) returns (WriteSchemaResponse);
+  rpc ReadSchema(ReadSchemaRequest) returns (ReadSchemaResponse);
+}
+
+message WriteSchemaRequest {
+  string schema = 1;
+  bool force = 2;
+}
+
+message WriteSchemaResponse {
+  ZedToken written_at = 1;
+  bool breaking_changes_overridden = 2;
+}
+
+message ReadSchemaRequest {}
+
+message ReadSchemaResponse {
+  string schema = 1;
+}

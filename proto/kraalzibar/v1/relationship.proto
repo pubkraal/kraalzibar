@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package kraalzibar.v1;
+
+import "kraalzibar/v1/core.proto";
+
+service RelationshipService {
+  rpc WriteRelationships(WriteRelationshipsRequest) returns (WriteRelationshipsResponse);
+  rpc ReadRelationships(ReadRelationshipsRequest) returns (ReadRelationshipsResponse);
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
+}
+
+message WriteRelationshipsRequest {
+  repeated RelationshipUpdate updates = 1;
+}
+
+message WriteRelationshipsResponse {
+  ZedToken written_at = 1;
+}
+
+message ReadRelationshipsRequest {
+  Consistency consistency = 1;
+  RelationshipFilter filter = 2;
+  uint32 optional_limit = 3;
+}
+
+message ReadRelationshipsResponse {
+  ZedToken read_at = 1;
+  repeated Relationship relationships = 2;
+}
+
+message WatchRequest {
+  repeated string object_types = 1;
+}
+
+message WatchResponse {
+  repeated RelationshipUpdate updates = 1;
+  ZedToken changed_at = 2;
+}
