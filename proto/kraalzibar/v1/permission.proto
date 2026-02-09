@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package kraalzibar.v1;
+
+import "kraalzibar/v1/core.proto";
+
+service PermissionService {
+  rpc CheckPermission(CheckPermissionRequest) returns (CheckPermissionResponse);
+  rpc ExpandPermissionTree(ExpandPermissionTreeRequest) returns (ExpandPermissionTreeResponse);
+  rpc LookupResources(LookupResourcesRequest) returns (stream LookupResourcesResponse);
+  rpc LookupSubjects(LookupSubjectsRequest) returns (stream LookupSubjectsResponse);
+}
+
+message CheckPermissionRequest {
+  Consistency consistency = 1;
+  ObjectReference resource = 2;
+  string permission = 3;
+  SubjectReference subject = 4;
+}
+
+message CheckPermissionResponse {
+  enum Permissionship {
+    PERMISSIONSHIP_UNSPECIFIED = 0;
+    PERMISSIONSHIP_NO_PERMISSION = 1;
+    PERMISSIONSHIP_HAS_PERMISSION = 2;
+  }
+
+  ZedToken checked_at = 1;
+  Permissionship permissionship = 2;
+}
+
+message ExpandPermissionTreeRequest {
+  Consistency consistency = 1;
+  ObjectReference resource = 2;
+  string permission = 3;
+}
+
+message ExpandPermissionTreeResponse {
+  ZedToken expanded_at = 1;
+  PermissionExpansionTree tree = 2;
+}
+
+message LookupResourcesRequest {
+  Consistency consistency = 1;
+  string resource_type = 2;
+  string permission = 3;
+  SubjectReference subject = 4;
+  uint32 optional_limit = 5;
+}
+
+message LookupResourcesResponse {
+  ZedToken looked_up_at = 1;
+  string resource_id = 2;
+}
+
+message LookupSubjectsRequest {
+  Consistency consistency = 1;
+  ObjectReference resource = 2;
+  string permission = 3;
+  string subject_type = 4;
+}
+
+message LookupSubjectsResponse {
+  ZedToken looked_up_at = 1;
+  SubjectReference subject = 2;
+}

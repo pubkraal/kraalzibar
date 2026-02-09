@@ -1,0 +1,30 @@
+# Kraalzibar server configuration
+# All values shown are defaults. Environment variables override these settings.
+
+[grpc]
+host = "0.0.0.0"
+port = 50051
+
+[rest]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+# Override with KRAALZIBAR_DATABASE_URL env var
+url = "postgresql://localhost:5432/kraalzibar"
+max_connections = 10
+
+[engine]
+max_depth = 6
+max_concurrent_branches = 10
+
+[schema_limits]
+max_types = 50
+max_relations_per_type = 30
+max_permissions_per_type = 30
+
+[log]
+# "json" or "pretty". Override with KRAALZIBAR_LOG_FORMAT.
+format = "json"
+# Override with KRAALZIBAR_LOG_LEVEL or RUST_LOG env var.
+level = "info"

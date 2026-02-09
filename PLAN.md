@@ -536,6 +536,32 @@ Use `deadpool-postgres` or `sqlx` connection pool with configurable size.
   category hierarchy)
 - Target: < 5ms p99 for Check on a warm cache with moderate graph depth
 
+### Deferred TODOs from Phase 3 Code Review
+
+These were identified during the Phase 3 PR review and deferred to later phases:
+
+#### Security & Auth
+- [ ] Wire auth middleware — replace hardcoded nil tenant ID with real API key
+  authentication (Phase 3.4 scope, currently stubbed)
+- [ ] Use env var for DB password in docker-compose instead of hardcoded value
+- [ ] Consider higher entropy for API key secret (currently 32 bytes / 256 bits)
+- [ ] Custom `Debug` impl for `DatabaseConfig` to redact credentials from logs
+
+#### Performance & Correctness
+- [ ] Optimize `lookup_resources` — currently fetches all tuples matching the
+  type, then filters. Replace with cursor-based pagination or indexed query
+- [ ] Return snapshot tokens in gRPC `ExpandPermissionTree`, `ReadRelationships`,
+  and `WriteRelationships` responses (currently only `CheckPermission` returns
+  `checked_at`)
+
+#### Code Quality
+- [ ] Fix unsafe `env::set_var`/`remove_var` in config tests — use `serial_test`
+  crate or refactor config loading to accept env as parameter
+- [ ] Align REST/gRPC error status for breaking schema changes — REST returns
+  409 Conflict, gRPC returns FAILED_PRECONDITION. Pick one semantic and align
+- [ ] Add integration tests for the server crate (end-to-end gRPC/REST against
+  a real running server)
+
 ### Deliverables - Phase 4
 
 - [ ] Application-level check result cache
