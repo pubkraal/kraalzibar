@@ -12,9 +12,11 @@ kraalzibar-core = { path = "../kraalzibar-core" }
 kraalzibar-storage = { path = "../kraalzibar-storage" }
 argon2 = "0.5"
 axum = { version = "0.7", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
 prost = "0.13"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 serde_json = "1"
 moka = { version = "0.12", features = ["future"] }
 thiserror = "2"

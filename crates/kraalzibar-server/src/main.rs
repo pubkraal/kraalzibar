@@ -1,6 +1,7 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
+use clap::Parser;
+use kraalzibar_server::cli::{Cli, Command};
 use kraalzibar_server::config::{AppConfig, LogFormat};
 use kraalzibar_server::grpc::{PermissionServiceImpl, RelationshipServiceImpl, SchemaServiceImpl};
 use kraalzibar_server::health::create_health_service;
@@ -67,11 +68,26 @@ fn init_logging(config: &AppConfig) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = std::env::args().nth(1).map(PathBuf::from);
+    let cli = Cli::parse();
 
-    let config = AppConfig::load(config_path.as_deref())?;
+    let config = AppConfig::load(cli.config.as_deref())?;
     init_logging(&config);
 
+    match cli.command {
+        Some(Command::Migrate) => run_migrate(&config).await,
+        Some(Command::Serve) | None => run_serve(config).await,
+    }
+}
+
+async fn run_migrate(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("running database migrations");
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+    tracing::info!("migrations completed successfully");
+    Ok(())
+}
+
+async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         grpc_addr = %config.grpc_addr(),
         rest_addr = %config.rest_addr(),
