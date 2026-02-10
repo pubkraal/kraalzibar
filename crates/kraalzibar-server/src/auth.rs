@@ -1,6 +1,7 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use rand::rngs::OsRng;
 
+use crate::audit;
 use kraalzibar_core::tuple::TenantId;
 
 #[derive(Debug, thiserror::Error)]
@@ -96,19 +97,30 @@ pub fn authenticate(
     raw_key: &str,
     lookup: impl FnOnce(&str) -> Option<ApiKeyRecord>,
 ) -> Result<TenantContext, AuthError> {
-    let (key_id, secret) = parse_api_key(raw_key)?;
+    let (key_id, secret) = parse_api_key(raw_key).inspect_err(|e| {
+        audit::audit_auth_failure(&e.to_string(), None);
+    })?;
 
-    let record = lookup(key_id).ok_or(AuthError::UnknownKey)?;
+    let record = match lookup(key_id) {
+        Some(r) => r,
+        None => {
+            audit::audit_auth_failure("unknown api key", Some(key_id));
+            return Err(AuthError::UnknownKey);
+        }
+    };
 
     if record.revoked {
+        audit::audit_auth_failure("api key revoked", Some(key_id));
         return Err(AuthError::RevokedKey);
     }
 
     let valid = verify_secret(secret, &record.key_hash)?;
     if !valid {
+        audit::audit_auth_failure("invalid secret", Some(key_id));
         return Err(AuthError::UnknownKey);
     }
 
+    audit::audit_auth_success(&record.tenant_id, &record.key_id);
     Ok(TenantContext {
         tenant_id: record.tenant_id,
         key_id: record.key_id,

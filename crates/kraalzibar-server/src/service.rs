@@ -153,7 +153,7 @@ where
         self
     }
 
-    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
+    #[tracing::instrument(skip(self, input), fields(%tenant_id, object_type = %input.object_type, permission = %input.permission))]
     pub async fn check_permission(
         &self,
         tenant_id: &TenantId,
@@ -231,7 +231,7 @@ where
         }
     }
 
-    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
+    #[tracing::instrument(skip(self, input), fields(%tenant_id, object_type = %input.object_type, permission = %input.permission))]
     pub async fn expand_permission_tree(
         &self,
         tenant_id: &TenantId,
@@ -329,7 +329,7 @@ where
         Ok(store.read_schema().await?)
     }
 
-    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
+    #[tracing::instrument(skip(self, input), fields(%tenant_id, object_type = %input.object_type, permission = %input.permission, subject_type = %input.subject_type))]
     pub async fn lookup_subjects(
         &self,
         tenant_id: &TenantId,
@@ -361,7 +361,7 @@ where
         })
     }
 
-    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
+    #[tracing::instrument(skip(self, input), fields(%tenant_id, resource_type = %input.resource_type, permission = %input.permission))]
     pub async fn lookup_resources(
         &self,
         tenant_id: &TenantId,

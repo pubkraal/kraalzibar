@@ -63,8 +63,7 @@ mod tests {
     #[derive(Debug)]
     struct CapturedEvent {
         target: String,
-        #[allow(dead_code)]
-        message: String,
+        _message: String,
         fields: Vec<(String, String)>,
     }
 
@@ -90,7 +89,7 @@ mod tests {
 
             self.events.lock().unwrap().push(CapturedEvent {
                 target: event.metadata().target().to_string(),
-                message,
+                _message: message,
                 fields,
             });
         }

@@ -31,6 +31,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
   prometheus:
     image: prom/prometheus:latest
