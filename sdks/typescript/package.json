@@ -1,0 +1,20 @@
+{
+  "name": "@kraalzibar/client",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Kraalzibar authorization server",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:integration": "INTEGRATION=true vitest run tests/integration.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
