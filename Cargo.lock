@@ -1420,6 +1420,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraalzibar-client"
+version = "0.1.0"
+dependencies = [
+ "kraalzibar-core",
+ "kraalzibar-server",
+ "kraalzibar-storage",
+ "prost",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "uuid",
+]
+
+[[package]]
 name = "kraalzibar-core"
 version = "0.1.0"
 dependencies = [
