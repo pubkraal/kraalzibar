@@ -89,7 +89,9 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         ApiError::Parse(_) | ApiError::Validation(_) => {
             error_response(StatusCode::BAD_REQUEST, &err.to_string())
         }
-        ApiError::BreakingChanges(_) => error_response(StatusCode::CONFLICT, &err.to_string()),
+        ApiError::BreakingChanges(_) => {
+            error_response(StatusCode::PRECONDITION_FAILED, &err.to_string())
+        }
         ApiError::Check(CheckError::StorageError(_)) | ApiError::Storage(_) => {
             tracing::error!(error = %err, "internal storage error");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
@@ -175,11 +177,14 @@ where
         .expand_permission_tree(&state.tenant_id, input)
         .await
     {
-        Ok(tree) => {
-            let tree_json = expand_tree_to_json(&tree);
+        Ok(output) => {
+            let tree_json = expand_tree_to_json(&output.tree);
             json_response(
                 StatusCode::OK,
-                &ExpandPermissionResponse { tree: tree_json },
+                &ExpandPermissionResponse {
+                    tree: tree_json,
+                    expanded_at: output.snapshot.map(|s| s.to_string()),
+                },
             )
         }
         Err(e) => api_error_to_response(e),
@@ -245,7 +250,7 @@ where
             Ok(c) => c,
             Err(resp) => return resp,
         },
-        limit: req.limit,
+        limit: req.limit.map(|l| l.min(10_000)),
     };
 
     match state
@@ -253,9 +258,12 @@ where
         .lookup_resources(&state.tenant_id, input)
         .await
     {
-        Ok(ids) => json_response(
+        Ok(output) => json_response(
             StatusCode::OK,
-            &LookupResourcesResponse { resource_ids: ids },
+            &LookupResourcesResponse {
+                resource_ids: output.resource_ids,
+                looked_up_at: output.snapshot.map(|s| s.to_string()),
+            },
         ),
         Err(e) => api_error_to_response(e),
     }
@@ -289,8 +297,9 @@ where
     };
 
     match state.service.lookup_subjects(&state.tenant_id, input).await {
-        Ok(subjects) => {
-            let subjects: Vec<SubjectResponse> = subjects
+        Ok(output) => {
+            let subjects: Vec<SubjectResponse> = output
+                .subjects
                 .into_iter()
                 .map(|s| SubjectResponse {
                     subject_type: s.subject_type,
@@ -298,7 +307,13 @@ where
                     subject_relation: s.subject_relation,
                 })
                 .collect();
-            json_response(StatusCode::OK, &LookupSubjectsResponse { subjects })
+            json_response(
+                StatusCode::OK,
+                &LookupSubjectsResponse {
+                    subjects,
+                    looked_up_at: output.snapshot.map(|s| s.to_string()),
+                },
+            )
         }
         Err(e) => api_error_to_response(e),
     }
@@ -801,5 +816,117 @@ mod tests {
         response.assert_status(axum::http::StatusCode::BAD_REQUEST);
         let body: serde_json::Value = response.json();
         assert!(body["error"].as_str().unwrap().contains("batch size"));
+    }
+
+    #[tokio::test]
+    async fn breaking_schema_returns_412() {
+        let server = make_test_server();
+        setup_schema(&server).await;
+
+        // Try to write a breaking schema without force
+        let response = server
+            .post("/v1/schema")
+            .json(&json!({"schema": "definition user {}"}))
+            .await;
+
+        response.assert_status(axum::http::StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn expand_response_includes_snapshot_token() {
+        let server = make_test_server();
+        setup_schema(&server).await;
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        let response = server
+            .post("/v1/permissions/expand")
+            .json(&json!({
+                "resource_type": "document",
+                "resource_id": "readme",
+                "permission": "can_view",
+                "consistency": {"type": "full"}
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["expanded_at"].is_string(),
+            "expand response should include expanded_at token: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_resources_response_includes_snapshot_token() {
+        let server = make_test_server();
+        setup_schema(&server).await;
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        let response = server
+            .post("/v1/permissions/resources")
+            .json(&json!({
+                "resource_type": "document",
+                "permission": "can_view",
+                "subject_type": "user",
+                "subject_id": "alice",
+                "consistency": {"type": "full"}
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["looked_up_at"].is_string(),
+            "lookup_resources response should include looked_up_at token: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_subjects_response_includes_snapshot_token() {
+        let server = make_test_server();
+        setup_schema(&server).await;
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        let response = server
+            .post("/v1/permissions/subjects")
+            .json(&json!({
+                "resource_type": "document",
+                "resource_id": "readme",
+                "permission": "can_view",
+                "subject_type": "user",
+                "consistency": {"type": "full"}
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["looked_up_at"].is_string(),
+            "lookup_subjects response should include looked_up_at token: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_resources_clamps_limit() {
+        let server = make_test_server();
+        setup_schema(&server).await;
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        // Sending a very large limit should not cause an error — it gets clamped
+        let response = server
+            .post("/v1/permissions/resources")
+            .json(&json!({
+                "resource_type": "document",
+                "permission": "can_view",
+                "subject_type": "user",
+                "subject_id": "alice",
+                "limit": 999_999_999
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let ids = body["resource_ids"].as_array().unwrap();
+        assert_eq!(ids.len(), 1);
     }
 }

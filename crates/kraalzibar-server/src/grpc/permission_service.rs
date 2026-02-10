@@ -88,15 +88,15 @@ where
             consistency: conversions::proto_consistency_to_domain(req.consistency.as_ref())?,
         };
 
-        let tree = self
+        let output = self
             .service
             .expand_permission_tree(&self.tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 
         Ok(Response::new(v1::ExpandPermissionTreeResponse {
-            expanded_at: None,
-            tree: Some(conversions::domain_expand_tree_to_proto(&tree)),
+            expanded_at: conversions::snapshot_to_zed_token(output.snapshot),
+            tree: Some(conversions::domain_expand_tree_to_proto(&output.tree)),
         }))
     }
 
@@ -125,18 +125,19 @@ where
             },
         };
 
-        let resources = self
+        let output = self
             .service
             .lookup_resources(&self.tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel(resources.len().max(1));
+        let looked_up_at = conversions::snapshot_to_zed_token(output.snapshot);
+        let (tx, rx) = tokio::sync::mpsc::channel(output.resource_ids.len().max(1));
 
-        for resource_id in resources {
+        for resource_id in output.resource_ids {
             let _ = tx
                 .send(Ok(v1::LookupResourcesResponse {
-                    looked_up_at: None,
+                    looked_up_at: looked_up_at.clone(),
                     resource_id,
                 }))
                 .await;
@@ -165,18 +166,19 @@ where
             consistency: conversions::proto_consistency_to_domain(req.consistency.as_ref())?,
         };
 
-        let subjects = self
+        let output = self
             .service
             .lookup_subjects(&self.tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel(subjects.len().max(1));
+        let looked_up_at = conversions::snapshot_to_zed_token(output.snapshot);
+        let (tx, rx) = tokio::sync::mpsc::channel(output.subjects.len().max(1));
 
-        for subject in &subjects {
+        for subject in &output.subjects {
             let _ = tx
                 .send(Ok(v1::LookupSubjectsResponse {
-                    looked_up_at: None,
+                    looked_up_at: looked_up_at.clone(),
                     subject: Some(conversions::domain_subject_to_proto(subject)),
                 }))
                 .await;

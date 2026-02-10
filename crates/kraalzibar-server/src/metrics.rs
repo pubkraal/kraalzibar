@@ -10,6 +10,10 @@ pub struct Metrics {
     request_total: AtomicU64,
     request_success: AtomicU64,
     request_error: AtomicU64,
+    schema_cache_hits: AtomicU64,
+    schema_cache_misses: AtomicU64,
+    check_cache_hits: AtomicU64,
+    check_cache_misses: AtomicU64,
 }
 
 impl Metrics {
@@ -41,6 +45,38 @@ impl Metrics {
         self.request_error.load(Ordering::Relaxed)
     }
 
+    pub fn record_schema_cache_hit(&self) {
+        self.schema_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_schema_cache_miss(&self) {
+        self.schema_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_check_cache_hit(&self) {
+        self.check_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_check_cache_miss(&self) {
+        self.check_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn schema_cache_hits(&self) -> u64 {
+        self.schema_cache_hits.load(Ordering::Relaxed)
+    }
+
+    pub fn schema_cache_misses(&self) -> u64 {
+        self.schema_cache_misses.load(Ordering::Relaxed)
+    }
+
+    pub fn check_cache_hits(&self) -> u64 {
+        self.check_cache_hits.load(Ordering::Relaxed)
+    }
+
+    pub fn check_cache_misses(&self) -> u64 {
+        self.check_cache_misses.load(Ordering::Relaxed)
+    }
+
     pub fn render_prometheus(&self) -> String {
         let mut output = String::new();
         output.push_str("# HELP kraalzibar_requests_total Total number of requests.\n");
@@ -60,6 +96,30 @@ impl Metrics {
         output.push_str(&format!(
             "kraalzibar_requests_error_total {}\n",
             self.request_error()
+        ));
+        output.push_str("# HELP kraalzibar_schema_cache_hits_total Schema cache hits.\n");
+        output.push_str("# TYPE kraalzibar_schema_cache_hits_total counter\n");
+        output.push_str(&format!(
+            "kraalzibar_schema_cache_hits_total {}\n",
+            self.schema_cache_hits()
+        ));
+        output.push_str("# HELP kraalzibar_schema_cache_misses_total Schema cache misses.\n");
+        output.push_str("# TYPE kraalzibar_schema_cache_misses_total counter\n");
+        output.push_str(&format!(
+            "kraalzibar_schema_cache_misses_total {}\n",
+            self.schema_cache_misses()
+        ));
+        output.push_str("# HELP kraalzibar_check_cache_hits_total Check cache hits.\n");
+        output.push_str("# TYPE kraalzibar_check_cache_hits_total counter\n");
+        output.push_str(&format!(
+            "kraalzibar_check_cache_hits_total {}\n",
+            self.check_cache_hits()
+        ));
+        output.push_str("# HELP kraalzibar_check_cache_misses_total Check cache misses.\n");
+        output.push_str("# TYPE kraalzibar_check_cache_misses_total counter\n");
+        output.push_str(&format!(
+            "kraalzibar_check_cache_misses_total {}\n",
+            self.check_cache_misses()
         ));
         output
     }
@@ -110,6 +170,32 @@ mod tests {
         assert!(output.contains("kraalzibar_requests_total 1"));
         assert!(output.contains("kraalzibar_requests_success_total 1"));
         assert!(output.contains("kraalzibar_requests_error_total 0"));
+    }
+
+    #[test]
+    fn metrics_include_cache_counters() {
+        let m = Metrics::new();
+        assert_eq!(m.schema_cache_hits(), 0);
+        assert_eq!(m.schema_cache_misses(), 0);
+        assert_eq!(m.check_cache_hits(), 0);
+        assert_eq!(m.check_cache_misses(), 0);
+    }
+
+    #[test]
+    fn prometheus_output_includes_cache_metrics() {
+        let m = Metrics::new();
+        m.record_schema_cache_hit();
+        m.record_check_cache_miss();
+
+        let output = m.render_prometheus();
+        assert!(
+            output.contains("kraalzibar_schema_cache_hits_total 1"),
+            "missing schema cache hits: {output}"
+        );
+        assert!(
+            output.contains("kraalzibar_check_cache_misses_total 1"),
+            "missing check cache misses: {output}"
+        );
     }
 
     #[tokio::test]

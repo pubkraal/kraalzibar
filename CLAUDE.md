@@ -159,7 +159,7 @@ configuration instructions as they become available.
   `crates/kraalzibar-server/src/adapter.rs`.
 - **`AuthzService<F: StoreFactory>`** is the shared service layer. Both gRPC and
   REST handlers call it. Each request creates a fresh store from the factory,
-  reads the schema, builds an engine, and evaluates. Schema is not cached yet.
+  loads the schema (from cache or storage), builds an engine, and evaluates.
 - **`EngineConfig` needs `Clone`** since the service creates engines per-request.
   Added `#[derive(Clone)]` in Phase 3.
 - **`lookup_resources`** scans all tuples for a type, deduplicates object IDs,
@@ -190,3 +190,24 @@ configuration instructions as they become available.
   Always run clippy after refactors.
 - **axum `DefaultBodyLimit`** requires importing from `axum::extract`. Add it
   as a `.layer()` on the router, not on individual routes.
+- **moka `Cache::try_get_with`** requires closures that return `Result`. For
+  simple insertions, use `cache.get()` + `cache.insert()` manually instead.
+- **Criterion benchmarks with tokio**: Use
+  `tokio::runtime::Builder::new_current_thread().enable_all().build()` — the
+  `rt` feature alone doesn't include `Runtime::new()`.
+- **`#[cfg(test)]` in bench files**: Test modules inside bench files are not
+  compiled. Validate factory helpers implicitly through benchmark execution.
+- **Optional metrics with `Option<Arc<Metrics>>`**: Use this pattern to add
+  observability without breaking existing tests. The `with_metrics()` builder
+  method keeps the API backward-compatible.
+- **Collapsible `if let` with `&&` (let chains)**: Rust 2024 edition supports
+  `if let Some(v) = expr && let Ok(n) = v.parse() { ... }`. Clippy enforces
+  this over nested `if let` blocks.
+- **Cache invalidation strategy**: Schema cache uses TTL (30s default) + local
+  invalidation on `write_schema`. Check cache uses snapshot-keyed entries
+  (naturally immutable) + `invalidate_all()` on writes. Cross-server staleness
+  for schema is bounded by TTL (same approach as SpiceDB).
+- **Check cache only caches snapshot-keyed requests**: `MinimizeLatency`
+  (snapshot=None) skips the cache because results can change between calls.
+  Only `AtExactSnapshot` and `FullConsistency` (which resolves to a concrete
+  snapshot) produce cacheable results.
