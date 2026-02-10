@@ -6,6 +6,7 @@ use tonic::{Request, Response, Status};
 use kraalzibar_core::tuple::TenantId;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
+use crate::metrics::Metrics;
 use crate::proto::kraalzibar::v1::{self, permission_service_server::PermissionService};
 use crate::service::{
     AuthzService, CheckPermissionInput, ExpandPermissionInput, LookupResourcesInput,
@@ -17,11 +18,21 @@ use super::conversions;
 pub struct PermissionServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
     tenant_id: TenantId,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> PermissionServiceImpl<F> {
     pub fn new(service: Arc<AuthzService<F>>, tenant_id: TenantId) -> Self {
-        Self { service, tenant_id }
+        Self {
+            service,
+            tenant_id,
+            metrics: None,
+        }
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
@@ -35,6 +46,7 @@ where
         &self,
         request: Request<v1::CheckPermissionRequest>,
     ) -> Result<Response<v1::CheckPermissionResponse>, Status> {
+        let start = std::time::Instant::now();
         let req = request.into_inner();
 
         let resource = req
@@ -59,6 +71,10 @@ where
             .await
             .map_err(api_error_to_status)?;
 
+        if let Some(m) = &self.metrics {
+            m.record_method_request("check", start.elapsed());
+        }
+
         let permissionship = if result.allowed {
             v1::check_permission_response::Permissionship::HasPermission
         } else {
@@ -75,6 +91,7 @@ where
         &self,
         request: Request<v1::ExpandPermissionTreeRequest>,
     ) -> Result<Response<v1::ExpandPermissionTreeResponse>, Status> {
+        let start = std::time::Instant::now();
         let req = request.into_inner();
 
         let resource = req
@@ -94,6 +111,10 @@ where
             .await
             .map_err(api_error_to_status)?;
 
+        if let Some(m) = &self.metrics {
+            m.record_method_request("expand", start.elapsed());
+        }
+
         Ok(Response::new(v1::ExpandPermissionTreeResponse {
             expanded_at: conversions::snapshot_to_zed_token(output.snapshot),
             tree: Some(conversions::domain_expand_tree_to_proto(&output.tree)),
@@ -106,6 +127,7 @@ where
         &self,
         request: Request<v1::LookupResourcesRequest>,
     ) -> Result<Response<Self::LookupResourcesStream>, Status> {
+        let start = std::time::Instant::now();
         let req = request.into_inner();
 
         let subject = req
@@ -131,6 +153,10 @@ where
             .await
             .map_err(api_error_to_status)?;
 
+        if let Some(m) = &self.metrics {
+            m.record_method_request("lookup_resources", start.elapsed());
+        }
+
         let looked_up_at = conversions::snapshot_to_zed_token(output.snapshot);
         let (tx, rx) = tokio::sync::mpsc::channel(output.resource_ids.len().max(1));
 
@@ -152,6 +178,7 @@ where
         &self,
         request: Request<v1::LookupSubjectsRequest>,
     ) -> Result<Response<Self::LookupSubjectsStream>, Status> {
+        let start = std::time::Instant::now();
         let req = request.into_inner();
 
         let resource = req
@@ -171,6 +198,10 @@ where
             .lookup_subjects(&self.tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
+
+        if let Some(m) = &self.metrics {
+            m.record_method_request("lookup_subjects", start.elapsed());
+        }
 
         let looked_up_at = conversions::snapshot_to_zed_token(output.snapshot);
         let (tx, rx) = tokio::sync::mpsc::channel(output.subjects.len().max(1));

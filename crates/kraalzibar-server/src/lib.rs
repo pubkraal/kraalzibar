@@ -1,5 +1,7 @@
 pub mod adapter;
+pub mod audit;
 pub mod auth;
+pub mod cli;
 pub mod config;
 pub mod error;
 pub mod grpc;
@@ -8,3 +10,4 @@ pub mod metrics;
 pub mod proto;
 pub mod rest;
 pub mod service;
+pub mod telemetry;

@@ -5,6 +5,7 @@ use tonic::{Request, Response, Status};
 use kraalzibar_core::tuple::TenantId;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
+use crate::metrics::Metrics;
 use crate::proto::kraalzibar::v1::{self, relationship_service_server::RelationshipService};
 use crate::service::AuthzService;
 
@@ -13,11 +14,21 @@ use super::conversions;
 pub struct RelationshipServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
     tenant_id: TenantId,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> RelationshipServiceImpl<F> {
     pub fn new(service: Arc<AuthzService<F>>, tenant_id: TenantId) -> Self {
-        Self { service, tenant_id }
+        Self {
+            service,
+            tenant_id,
+            metrics: None,
+        }
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
@@ -31,6 +42,7 @@ where
         &self,
         request: Request<v1::WriteRelationshipsRequest>,
     ) -> Result<Response<v1::WriteRelationshipsResponse>, Status> {
+        let start = std::time::Instant::now();
         let req = request.into_inner();
 
         let mut writes = Vec::new();
@@ -72,6 +84,10 @@ where
             .await
             .map_err(super::api_error_to_status)?;
 
+        if let Some(m) = &self.metrics {
+            m.record_method_request("write_relationships", start.elapsed());
+        }
+
         Ok(Response::new(v1::WriteRelationshipsResponse {
             written_at: conversions::snapshot_to_zed_token(Some(token)),
         }))
@@ -81,6 +97,7 @@ where
         &self,
         request: Request<v1::ReadRelationshipsRequest>,
     ) -> Result<Response<v1::ReadRelationshipsResponse>, Status> {
+        let start = std::time::Instant::now();
         let req = request.into_inner();
 
         let filter = req
@@ -102,6 +119,10 @@ where
             .read_relationships(&self.tenant_id, &filter, consistency, limit)
             .await
             .map_err(super::api_error_to_status)?;
+
+        if let Some(m) = &self.metrics {
+            m.record_method_request("read_relationships", start.elapsed());
+        }
 
         let relationships: Vec<_> = tuples
             .iter()

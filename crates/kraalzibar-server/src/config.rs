@@ -11,6 +11,27 @@ pub struct AppConfig {
     pub schema_limits: SchemaLimitsConfig,
     pub log: LogConfig,
     pub cache: CacheConfig,
+    pub tracing: TracingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TracingConfig {
+    pub enabled: bool,
+    pub otlp_endpoint: String,
+    pub service_name: String,
+    pub sample_rate: f64,
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            otlp_endpoint: "http://localhost:4317".to_string(),
+            service_name: "kraalzibar".to_string(),
+            sample_rate: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -261,6 +282,20 @@ impl AppConfig {
                 _ => {}
             }
         }
+        if let Some(v) = env("KRAALZIBAR_TRACING_ENABLED") {
+            self.tracing.enabled = v == "true" || v == "1";
+        }
+        if let Some(v) = env("KRAALZIBAR_TRACING_OTLP_ENDPOINT") {
+            self.tracing.otlp_endpoint = v;
+        }
+        if let Some(v) = env("KRAALZIBAR_TRACING_SERVICE_NAME") {
+            self.tracing.service_name = v;
+        }
+        if let Some(v) = env("KRAALZIBAR_TRACING_SAMPLE_RATE")
+            && let Ok(rate) = v.parse()
+        {
+            self.tracing.sample_rate = rate;
+        }
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -342,6 +377,16 @@ impl AppConfig {
         if self.cache.check_cache_ttl_seconds == 0 {
             return Err(ConfigError::Validation(
                 "cache.check_cache_ttl_seconds must be non-zero".to_string(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.tracing.sample_rate) {
+            return Err(ConfigError::Validation(
+                "tracing.sample_rate must be between 0.0 and 1.0".to_string(),
+            ));
+        }
+        if self.tracing.enabled && self.tracing.otlp_endpoint.is_empty() {
+            return Err(ConfigError::Validation(
+                "tracing.otlp_endpoint must not be empty when tracing is enabled".to_string(),
             ));
         }
         Ok(())
@@ -649,5 +694,89 @@ max_lifetime_seconds = 900
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("min_connections")),
             "expected validation error for min > max: {result:?}"
         );
+    }
+
+    // --- 6C: Tracing Config Tests ---
+
+    #[test]
+    fn tracing_config_defaults() {
+        let config = TracingConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.otlp_endpoint, "http://localhost:4317");
+        assert_eq!(config.service_name, "kraalzibar");
+        assert_eq!(config.sample_rate, 1.0);
+    }
+
+    #[test]
+    fn tracing_config_deserializes_from_toml() {
+        let toml_str = r#"
+[tracing]
+enabled = true
+otlp_endpoint = "http://jaeger:4317"
+service_name = "my-service"
+sample_rate = 0.5
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.tracing.enabled);
+        assert_eq!(config.tracing.otlp_endpoint, "http://jaeger:4317");
+        assert_eq!(config.tracing.service_name, "my-service");
+        assert_eq!(config.tracing.sample_rate, 0.5);
+    }
+
+    #[test]
+    fn tracing_config_validates_sample_rate_bounds() {
+        let mut config = AppConfig::default();
+        config.tracing.sample_rate = 1.5;
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("sample_rate")),
+            "expected validation error for sample_rate > 1.0: {result:?}"
+        );
+
+        config.tracing.sample_rate = -0.1;
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("sample_rate")),
+            "expected validation error for sample_rate < 0.0: {result:?}"
+        );
+    }
+
+    #[test]
+    fn tracing_config_validates_endpoint_nonempty_when_enabled() {
+        let mut config = AppConfig::default();
+        config.tracing.enabled = true;
+        config.tracing.otlp_endpoint = String::new();
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("otlp_endpoint")),
+            "expected validation error for empty endpoint: {result:?}"
+        );
+    }
+
+    #[test]
+    fn tracing_config_env_overrides() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_TRACING_ENABLED" => Some("true".to_string()),
+                "KRAALZIBAR_TRACING_OTLP_ENDPOINT" => Some("http://otel:4317".to_string()),
+                "KRAALZIBAR_TRACING_SERVICE_NAME" => Some("test-svc".to_string()),
+                "KRAALZIBAR_TRACING_SAMPLE_RATE" => Some("0.25".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert!(config.tracing.enabled);
+        assert_eq!(config.tracing.otlp_endpoint, "http://otel:4317");
+        assert_eq!(config.tracing.service_name, "test-svc");
+        assert_eq!(config.tracing.sample_rate, 0.25);
+    }
+
+    #[test]
+    fn app_config_includes_tracing_section() {
+        let config = AppConfig::default();
+        assert!(!config.tracing.enabled);
+        assert_eq!(config.tracing.service_name, "kraalzibar");
     }
 }
