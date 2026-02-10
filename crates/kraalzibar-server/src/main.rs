@@ -16,24 +16,52 @@ use kraalzibar_storage::InMemoryStoreFactory;
 
 use kraalzibar_core::tuple::TenantId;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+#[cfg(feature = "telemetry")]
+use kraalzibar_server::telemetry;
 
 fn init_logging(config: &AppConfig) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log.level));
 
+    // OTel layer is typed to bare Registry, so it must be added first.
+    // Layer order (bottom to top): Registry → OTel → EnvFilter → fmt
+    let registry = tracing_subscriber::registry();
+
+    #[cfg(feature = "telemetry")]
+    let otel_provider = telemetry::init_telemetry(&config.tracing);
+
+    #[cfg(feature = "telemetry")]
+    let otel_layer = otel_provider.as_ref().map(telemetry::make_otel_layer);
+
+    #[cfg(feature = "telemetry")]
+    let registry = registry.with(otel_layer);
+
+    let registry = registry.with(filter);
+
     match config.log.format {
         LogFormat::Json => {
-            tracing_subscriber::fmt()
-                .json()
-                .with_env_filter(filter)
-                .init();
+            let fmt_layer = tracing_subscriber::fmt::layer().json();
+            registry.with(fmt_layer).init();
         }
         LogFormat::Pretty => {
-            tracing_subscriber::fmt()
-                .pretty()
-                .with_env_filter(filter)
-                .init();
+            let fmt_layer = tracing_subscriber::fmt::layer().pretty();
+            registry.with(fmt_layer).init();
         }
+    }
+
+    #[cfg(feature = "telemetry")]
+    if otel_provider.is_some() {
+        tracing::info!("OpenTelemetry tracing enabled");
+    }
+
+    // Leak the provider into a static to keep it alive for the process lifetime.
+    // Shutdown is handled by the runtime on process exit.
+    #[cfg(feature = "telemetry")]
+    if let Some(provider) = otel_provider {
+        std::mem::forget(provider);
     }
 }
 

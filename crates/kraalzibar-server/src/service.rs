@@ -153,6 +153,7 @@ where
         self
     }
 
+    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
     pub async fn check_permission(
         &self,
         tenant_id: &TenantId,
@@ -230,6 +231,7 @@ where
         }
     }
 
+    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
     pub async fn expand_permission_tree(
         &self,
         tenant_id: &TenantId,
@@ -255,6 +257,7 @@ where
         Ok(ExpandPermissionOutput { tree, snapshot })
     }
 
+    #[tracing::instrument(skip(self, writes, deletes), fields(%tenant_id))]
     pub async fn write_relationships(
         &self,
         tenant_id: &TenantId,
@@ -268,6 +271,7 @@ where
         Ok(token)
     }
 
+    #[tracing::instrument(skip(self, filter), fields(%tenant_id))]
     pub async fn read_relationships(
         &self,
         tenant_id: &TenantId,
@@ -280,6 +284,7 @@ where
         Ok(store.read(filter, snapshot, limit).await?)
     }
 
+    #[tracing::instrument(skip(self, definition), fields(%tenant_id))]
     pub async fn write_schema(
         &self,
         tenant_id: &TenantId,
@@ -318,11 +323,13 @@ where
         })
     }
 
+    #[tracing::instrument(skip(self), fields(%tenant_id))]
     pub async fn read_schema(&self, tenant_id: &TenantId) -> Result<Option<String>, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
         Ok(store.read_schema().await?)
     }
 
+    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
     pub async fn lookup_subjects(
         &self,
         tenant_id: &TenantId,
@@ -354,6 +361,7 @@ where
         })
     }
 
+    #[tracing::instrument(skip(self, input), fields(%tenant_id))]
     pub async fn lookup_resources(
         &self,
         tenant_id: &TenantId,
@@ -1953,5 +1961,150 @@ mod tests {
             "event",
             "relationship_write"
         ));
+    }
+
+    // --- 6C: Tracing Span Tests ---
+
+    mod span_test_helpers {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Debug)]
+        pub struct CapturedSpan {
+            pub name: String,
+            pub fields: Vec<(String, String)>,
+        }
+
+        struct SpanLayer {
+            spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        }
+
+        impl<S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>
+            tracing_subscriber::Layer<S> for SpanLayer
+        {
+            fn on_new_span(
+                &self,
+                attrs: &tracing::span::Attributes<'_>,
+                _id: &tracing::span::Id,
+                _ctx: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                let mut fields = Vec::new();
+                let mut visitor = FieldVisitor(&mut fields);
+                attrs.record(&mut visitor);
+                self.spans.lock().unwrap().push(CapturedSpan {
+                    name: attrs.metadata().name().to_string(),
+                    fields,
+                });
+            }
+        }
+
+        struct FieldVisitor<'a>(&'a mut Vec<(String, String)>);
+
+        impl tracing::field::Visit for FieldVisitor<'_> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .push((field.name().to_string(), format!("{value:?}")));
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                self.0.push((field.name().to_string(), value.to_string()));
+            }
+        }
+
+        pub fn make_span_subscriber() -> (
+            impl tracing::Subscriber + Send + Sync,
+            Arc<Mutex<Vec<CapturedSpan>>>,
+        ) {
+            let spans = Arc::new(Mutex::new(Vec::new()));
+            let layer = SpanLayer {
+                spans: Arc::clone(&spans),
+            };
+            let subscriber = tracing_subscriber::registry().with(layer);
+            (subscriber, spans)
+        }
+    }
+
+    #[tokio::test]
+    async fn service_methods_have_tracing_spans() {
+        let (service, tenant_id) = make_service();
+        let (subscriber, spans) = span_test_helpers::make_span_subscriber();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // write_schema creates a span
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        // check_permission creates a span
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::MinimizeLatency,
+                ),
+            )
+            .await
+            .unwrap();
+
+        drop(_guard);
+
+        let spans = Arc::try_unwrap(spans).unwrap().into_inner().unwrap();
+        let span_names: Vec<&str> = spans.iter().map(|s| s.name.as_str()).collect();
+
+        assert!(
+            span_names.contains(&"check_permission"),
+            "should have check_permission span: {span_names:?}"
+        );
+        assert!(
+            span_names.contains(&"write_schema"),
+            "should have write_schema span: {span_names:?}"
+        );
+        assert!(
+            span_names.contains(&"write_relationships"),
+            "should have write_relationships span: {span_names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tracing_spans_include_tenant_id() {
+        let (service, tenant_id) = make_service();
+        let (subscriber, spans) = span_test_helpers::make_span_subscriber();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        drop(_guard);
+
+        let spans = Arc::try_unwrap(spans).unwrap().into_inner().unwrap();
+        let write_schema_span = spans.iter().find(|s| s.name == "write_schema");
+        assert!(
+            write_schema_span.is_some(),
+            "write_schema span should exist"
+        );
+
+        let has_tenant_id = write_schema_span
+            .unwrap()
+            .fields
+            .iter()
+            .any(|(k, _)| k == "tenant_id");
+        assert!(
+            has_tenant_id,
+            "write_schema span should include tenant_id field"
+        );
     }
 }

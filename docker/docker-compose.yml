@@ -26,9 +26,40 @@ services:
       KRAALZIBAR_DATABASE_URL: "postgresql://kraalzibar:kraalzibar@postgres:5432/kraalzibar"
       KRAALZIBAR_LOG_FORMAT: "json"
       KRAALZIBAR_LOG_LEVEL: "info"
+      KRAALZIBAR_TRACING_ENABLED: "true"
+      KRAALZIBAR_TRACING_OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       postgres:
         condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - server
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "4317:4317"
+      - "16686:16686"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - jaeger
 
 volumes:
   pgdata:

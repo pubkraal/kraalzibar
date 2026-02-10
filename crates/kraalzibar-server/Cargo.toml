@@ -23,9 +23,17 @@ tokio-stream = "0.1"
 toml = "0.8"
 tonic = "0.12"
 tonic-health = "0.12"
+opentelemetry = { version = "0.24", optional = true }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.17", features = ["tonic"], optional = true }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-opentelemetry = { version = "0.25", optional = true }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "registry"] }
 uuid = { version = "1", features = ["v4"] }
+
+[features]
+default = ["telemetry"]
+telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 
 [dev-dependencies]
 axum-test = "16"

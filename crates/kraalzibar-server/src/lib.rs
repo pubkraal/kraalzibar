@@ -9,3 +9,4 @@ pub mod metrics;
 pub mod proto;
 pub mod rest;
 pub mod service;
+pub mod telemetry;
