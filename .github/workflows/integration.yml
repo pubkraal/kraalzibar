@@ -1,0 +1,47 @@
+name: Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    name: Docker Build & Health Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start services
+        working-directory: docker
+        run: docker compose up -d --build --wait
+        timeout-minutes: 10
+
+      - name: Wait for server health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/healthz > /dev/null 2>&1; then
+              echo "Server is healthy"
+              exit 0
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 2
+          done
+          echo "Server failed to start"
+          docker compose -f docker/docker-compose.yml logs server
+          exit 1
+
+      - name: Verify gRPC port is listening
+        run: |
+          if nc -z localhost 50051; then
+            echo "gRPC port 50051 is open"
+          else
+            echo "gRPC port 50051 is not reachable"
+            exit 1
+          fi
+
+      - name: Stop services
+        if: always()
+        working-directory: docker
+        run: docker compose down -v

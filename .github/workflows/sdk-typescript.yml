@@ -1,0 +1,34 @@
+name: TypeScript SDK CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sdks/typescript/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sdks/typescript/**"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+
+      - name: Type check
+        working-directory: sdks/typescript
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        working-directory: sdks/typescript
+        run: npm test

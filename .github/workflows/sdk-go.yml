@@ -1,0 +1,33 @@
+name: Go SDK CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sdks/go/**"
+      - "proto/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sdks/go/**"
+      - "proto/**"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: sdks/go/go.sum
+
+      - name: Run tests
+        working-directory: sdks/go
+        run: go test ./...
+
+      - name: Run vet
+        working-directory: sdks/go
+        run: go vet ./...

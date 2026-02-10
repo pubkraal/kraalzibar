@@ -211,3 +211,17 @@ configuration instructions as they become available.
   (snapshot=None) skips the cache because results can change between calls.
   Only `AtExactSnapshot` and `FullConsistency` (which resolves to a concrete
   snapshot) produce cacheable results.
+- **`protoc-gen-go` vs `protoc-gen-go-grpc` package name mismatch**: Old
+  versions of `protoc-gen-go-grpc` generate a different Go package name
+  (e.g., `kraalzibar_v1`) than `protoc-gen-go` (`v1`). Upgrade both plugins
+  to latest (`go install ...@latest`) before generating.
+- **Always add `.gitignore` before `git add`**: In TypeScript projects,
+  `node_modules/` will be committed if no `.gitignore` is in place. Add
+  `.gitignore` first, then `git add`.
+- **In-process gRPC test server pattern**: Bind `TcpListener` to `127.0.0.1:0`,
+  get the random port from `local_addr()`, wrap in `TcpListenerStream`, pass to
+  `tonic::transport::Server::serve_with_incoming()`. No Docker needed for Rust
+  integration tests.
+- **Clippy `derivable_impls`**: If a `Default` impl just selects a specific enum
+  variant, use `#[derive(Default)]` with `#[default]` attribute on the variant
+  instead of a manual `impl Default`.
