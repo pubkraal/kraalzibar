@@ -11,5 +11,10 @@ tokio-stream = "0.1"
 tonic = { version = "0.12", features = ["transport"] }
 thiserror = "2"
 
+[dev-dependencies]
+kraalzibar-server = { path = "../kraalzibar-server" }
+kraalzibar-storage = { path = "../kraalzibar-storage" }
+uuid = "1"
+
 [build-dependencies]
 tonic-build = "0.12"
