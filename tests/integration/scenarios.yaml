@@ -1,0 +1,215 @@
+# Shared SDK integration test scenarios
+#
+# Each SDK implements these scenarios in its native test framework.
+# This file is the behavioral contract all SDKs must satisfy.
+
+scenarios:
+  - name: basic_check_permission_granted
+    description: Direct viewer relation grants can_view permission
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          permission can_view = viewer
+        }
+      relationships:
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: viewer
+          subject_type: user
+          subject_id: alice
+    operations:
+      - type: check_permission
+        resource_type: document
+        resource_id: readme
+        permission: can_view
+        subject_type: user
+        subject_id: alice
+        expected:
+          allowed: true
+
+  - name: basic_check_permission_denied
+    description: No relation means permission is denied
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          permission can_view = viewer
+        }
+      relationships:
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: viewer
+          subject_type: user
+          subject_id: alice
+    operations:
+      - type: check_permission
+        resource_type: document
+        resource_id: readme
+        permission: can_view
+        subject_type: user
+        subject_id: bob
+        expected:
+          allowed: false
+
+  - name: write_and_read_relationships
+    description: Write 2 tuples, read back, assert count = 2
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          permission can_view = viewer
+        }
+      relationships:
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: viewer
+          subject_type: user
+          subject_id: alice
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: viewer
+          subject_type: user
+          subject_id: bob
+    operations:
+      - type: read_relationships
+        filter:
+          object_type: document
+          object_id: readme
+          relation: viewer
+        expected:
+          count: 2
+
+  - name: lookup_resources
+    description: Alice views 2 docs but not a 3rd
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          permission can_view = viewer
+        }
+      relationships:
+        - operation: touch
+          object_type: document
+          object_id: doc1
+          relation: viewer
+          subject_type: user
+          subject_id: alice
+        - operation: touch
+          object_type: document
+          object_id: doc2
+          relation: viewer
+          subject_type: user
+          subject_id: alice
+        - operation: touch
+          object_type: document
+          object_id: doc3
+          relation: viewer
+          subject_type: user
+          subject_id: bob
+    operations:
+      - type: lookup_resources
+        resource_type: document
+        permission: can_view
+        subject_type: user
+        subject_id: alice
+        expected:
+          resource_ids:
+            - doc1
+            - doc2
+
+  - name: lookup_subjects
+    description: Both viewer and owner are found as subjects with can_view
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          relation owner: user
+          permission can_view = viewer + owner
+        }
+      relationships:
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: viewer
+          subject_type: user
+          subject_id: alice
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: owner
+          subject_type: user
+          subject_id: bob
+    operations:
+      - type: lookup_subjects
+        resource_type: document
+        resource_id: readme
+        permission: can_view
+        subject_type: user
+        expected:
+          subject_ids:
+            - alice
+            - bob
+
+  - name: schema_write_and_read
+    description: Write schema, read back, contains expected types
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          permission can_view = viewer
+        }
+      relationships: []
+    operations:
+      - type: read_schema
+        expected:
+          contains:
+            - "definition user"
+            - "definition document"
+            - "relation viewer"
+            - "permission can_view"
+
+  - name: computed_permission_via_union
+    description: Editor gains can_view through can_edit union
+    setup:
+      schema: |
+        definition user {}
+
+        definition document {
+          relation viewer: user
+          relation editor: user
+          permission can_edit = editor
+          permission can_view = viewer + can_edit
+        }
+      relationships:
+        - operation: touch
+          object_type: document
+          object_id: readme
+          relation: editor
+          subject_type: user
+          subject_id: alice
+    operations:
+      - type: check_permission
+        resource_type: document
+        resource_id: readme
+        permission: can_view
+        subject_type: user
+        subject_id: alice
+        expected:
+          allowed: true
