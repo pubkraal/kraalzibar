@@ -116,8 +116,15 @@ mod tests {
     }
 
     async fn test_pool() -> PgPool {
+        use std::sync::OnceLock;
         use testcontainers::runners::AsyncRunner;
         use testcontainers_modules::postgres::Postgres;
+
+        static POOL: OnceLock<PgPool> = OnceLock::new();
+
+        if let Some(pool) = POOL.get() {
+            return pool.clone();
+        }
 
         let container = Postgres::default().start().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
@@ -128,10 +135,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Leak the container so it lives for the test duration
+        // Leak the container so it lives for the process duration
         std::mem::forget(container);
 
-        pool
+        POOL.get_or_init(|| pool).clone()
     }
 
     async fn provision_test_tenant(pool: &PgPool, tenant_id: &TenantId, name: &str) {
