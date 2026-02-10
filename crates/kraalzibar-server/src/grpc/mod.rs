@@ -7,7 +7,17 @@ pub use permission_service::PermissionServiceImpl;
 pub use relationship_service::RelationshipServiceImpl;
 pub use schema_service::SchemaServiceImpl;
 
-use tonic::Status;
+use kraalzibar_core::tuple::TenantId;
+use tonic::{Request, Status};
+
+#[allow(clippy::result_large_err)]
+fn extract_tenant_id<T>(request: &Request<T>) -> Result<TenantId, Status> {
+    request
+        .extensions()
+        .get::<TenantId>()
+        .cloned()
+        .ok_or_else(|| Status::unauthenticated("missing tenant context"))
+}
 
 fn api_error_to_status(err: crate::error::ApiError) -> Status {
     use crate::error::ApiError;

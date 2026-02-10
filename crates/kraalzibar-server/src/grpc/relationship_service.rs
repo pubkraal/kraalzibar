@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use kraalzibar_core::tuple::TenantId;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::metrics::Metrics;
 use crate::proto::kraalzibar::v1::{self, relationship_service_server::RelationshipService};
 use crate::service::AuthzService;
 
-use super::conversions;
+use super::{conversions, extract_tenant_id};
 
 pub struct RelationshipServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
@@ -28,15 +27,6 @@ impl<F: StoreFactory> RelationshipServiceImpl<F> {
         self.metrics = Some(metrics);
         self
     }
-}
-
-#[allow(clippy::result_large_err)]
-fn extract_tenant_id<T>(request: &Request<T>) -> Result<TenantId, Status> {
-    request
-        .extensions()
-        .get::<TenantId>()
-        .cloned()
-        .ok_or_else(|| Status::unauthenticated("missing tenant context"))
 }
 
 #[tonic::async_trait]
