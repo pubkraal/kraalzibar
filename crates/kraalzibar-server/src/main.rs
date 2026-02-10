@@ -8,6 +8,7 @@ use kraalzibar_server::config::{AppConfig, LogFormat};
 use kraalzibar_server::grpc::{PermissionServiceImpl, RelationshipServiceImpl, SchemaServiceImpl};
 use kraalzibar_server::health::create_health_service;
 use kraalzibar_server::metrics::{self, Metrics};
+use kraalzibar_server::middleware::AuthState;
 use kraalzibar_server::proto::kraalzibar::v1::{
     permission_service_server::PermissionServiceServer,
     relationship_service_server::RelationshipServiceServer,
@@ -16,6 +17,7 @@ use kraalzibar_server::proto::kraalzibar::v1::{
 use kraalzibar_server::rest;
 use kraalzibar_server::service::AuthzService;
 use kraalzibar_storage::InMemoryStoreFactory;
+use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use kraalzibar_core::tuple::TenantId;
 use tracing_subscriber::EnvFilter;
@@ -153,7 +155,50 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
         "starting kraalzibar server"
     );
 
-    let factory = Arc::new(InMemoryStoreFactory::new());
+    if config.database.is_configured() {
+        tracing::info!("database configured — using PostgreSQL backend with API key auth");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(config.database.max_connections)
+            .min_connections(config.database.min_connections)
+            .acquire_timeout(std::time::Duration::from_secs(
+                config.database.acquire_timeout_seconds,
+            ))
+            .idle_timeout(std::time::Duration::from_secs(
+                config.database.idle_timeout_seconds,
+            ))
+            .max_lifetime(std::time::Duration::from_secs(
+                config.database.max_lifetime_seconds,
+            ))
+            .connect(&config.database.url)
+            .await?;
+
+        kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+        let factory = Arc::new(kraalzibar_storage::postgres::PostgresStoreFactory::new(
+            pool.clone(),
+        ));
+        let repo = Arc::new(ApiKeyRepository::new(pool));
+        let auth_state = AuthState::with_repository(repo);
+
+        start_server(config, factory, auth_state).await
+    } else {
+        tracing::warn!("no database URL configured — running in dev mode (in-memory, no auth)");
+        let factory = Arc::new(InMemoryStoreFactory::new());
+        let auth_state = AuthState::dev_mode();
+
+        start_server(config, factory, auth_state).await
+    }
+}
+
+async fn start_server<F>(
+    config: AppConfig,
+    factory: Arc<F>,
+    auth_state: AuthState,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: StoreFactory + 'static,
+    F::Store: RelationshipStore + SchemaStore,
+{
     let metrics = Arc::new(Metrics::new());
     let service = Arc::new(
         AuthzService::with_cache_config(
@@ -165,8 +210,6 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
         .with_metrics(Arc::clone(&metrics)),
     );
 
-    let default_tenant = TenantId::new(uuid::Uuid::nil());
-
     let (mut health_reporter, health_service) = create_health_service();
     health_reporter
         .set_serving::<tonic_health::pb::health_server::HealthServer<tonic_health::server::HealthService>>()
@@ -177,11 +220,10 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
 
     const MAX_GRPC_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
-    let tenant_interceptor = {
-        let tenant = default_tenant.clone();
-        move |mut req: tonic::Request<()>| -> Result<tonic::Request<()>, tonic::Status> {
-            req.extensions_mut().insert(tenant.clone());
-            Ok(req)
+    let grpc_auth = {
+        let auth = auth_state.clone();
+        move |req: tonic::Request<()>| -> Result<tonic::Request<()>, tonic::Status> {
+            kraalzibar_server::middleware::grpc_auth_interceptor(&auth, req)
         }
     };
 
@@ -190,29 +232,28 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
             PermissionServiceImpl::new(Arc::clone(&service)).with_metrics(Arc::clone(&metrics)),
         )
         .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        tenant_interceptor.clone(),
+        grpc_auth.clone(),
     );
     let relationship_svc = tonic::service::interceptor::InterceptedService::new(
         RelationshipServiceServer::new(
             RelationshipServiceImpl::new(Arc::clone(&service)).with_metrics(Arc::clone(&metrics)),
         )
         .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        tenant_interceptor.clone(),
+        grpc_auth.clone(),
     );
     let schema_svc = tonic::service::interceptor::InterceptedService::new(
         SchemaServiceServer::new(
             SchemaServiceImpl::new(Arc::clone(&service)).with_metrics(Arc::clone(&metrics)),
         )
         .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        tenant_interceptor,
+        grpc_auth,
     );
 
-    // REST server with metrics endpoint
     let rest_state = rest::AppState {
         service: Arc::clone(&service),
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = rest::create_router(rest_state, default_tenant).route(
+    let rest_router = rest::create_router(rest_state, auth_state).route(
         "/metrics",
         axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
     );

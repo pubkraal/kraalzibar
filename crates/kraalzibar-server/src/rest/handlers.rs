@@ -488,11 +488,11 @@ pub async fn healthz() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::super::{AppState, create_router};
+    use crate::middleware::AuthState;
     use crate::service::AuthzService;
     use axum_test::TestServer;
     use kraalzibar_core::engine::EngineConfig;
     use kraalzibar_core::schema::SchemaLimits;
-    use kraalzibar_core::tuple::TenantId;
     use kraalzibar_storage::InMemoryStoreFactory;
     use serde_json::json;
     use std::sync::Arc;
@@ -509,13 +509,12 @@ mod tests {
             EngineConfig::default(),
             SchemaLimits::default(),
         ));
-        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
         let metrics = Arc::new(crate::metrics::Metrics::new());
         let state = AppState {
             service,
             metrics: Arc::clone(&metrics),
         };
-        let app = create_router(state, tenant_id);
+        let app = create_router(state, AuthState::dev_mode());
         (TestServer::new(app).unwrap(), metrics)
     }
 
