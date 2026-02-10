@@ -30,6 +30,8 @@ pub struct ExpandPermissionRequest {
 #[derive(Debug, Serialize)]
 pub struct ExpandPermissionResponse {
     pub tree: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expanded_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +49,8 @@ pub struct LookupResourcesRequest {
 #[derive(Debug, Serialize)]
 pub struct LookupResourcesResponse {
     pub resource_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub looked_up_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +66,8 @@ pub struct LookupSubjectsRequest {
 #[derive(Debug, Serialize)]
 pub struct LookupSubjectsResponse {
     pub subjects: Vec<SubjectResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub looked_up_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
