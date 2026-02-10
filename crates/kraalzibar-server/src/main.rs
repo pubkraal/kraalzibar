@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use kraalzibar_server::api_key_repository::ApiKeyRepository;
+use kraalzibar_server::auth;
 use kraalzibar_server::cli::{Cli, Command};
 use kraalzibar_server::config::{AppConfig, LogFormat};
 use kraalzibar_server::grpc::{PermissionServiceImpl, RelationshipServiceImpl, SchemaServiceImpl};
@@ -75,6 +77,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Some(Command::Migrate) => run_migrate(&config).await,
+        Some(Command::ProvisionTenant { name }) => run_provision_tenant(&config, &name).await,
+        Some(Command::CreateApiKey { tenant_name }) => {
+            run_create_api_key(&config, &tenant_name).await
+        }
         Some(Command::Serve) | None => run_serve(config).await,
     }
 }
@@ -84,6 +90,59 @@ async fn run_migrate(config: &AppConfig) -> Result<(), Box<dyn std::error::Error
     let pool = sqlx::PgPool::connect(&config.database.url).await?;
     kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
     tracing::info!("migrations completed successfully");
+    Ok(())
+}
+
+async fn run_provision_tenant(
+    config: &AppConfig,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let tenant_id = TenantId::new(uuid::Uuid::new_v4());
+    let factory = kraalzibar_storage::postgres::PostgresStoreFactory::new(pool);
+    factory.provision_tenant(&tenant_id, name).await?;
+
+    println!("Tenant provisioned successfully");
+    println!("  Name:      {name}");
+    println!("  Tenant ID: {}", tenant_id.as_uuid());
+    Ok(())
+}
+
+async fn run_create_api_key(
+    config: &AppConfig,
+    tenant_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let row = sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM tenants WHERE name = $1")
+        .bind(tenant_name)
+        .fetch_optional(&pool)
+        .await?;
+
+    let tenant_uuid = match row {
+        Some((id,)) => id,
+        None => {
+            eprintln!("Error: tenant '{tenant_name}' not found");
+            std::process::exit(1);
+        }
+    };
+
+    let (full_key, secret) = auth::generate_api_key();
+    let (key_id, _) = auth::parse_api_key(&full_key).expect("generated key should parse");
+    let key_hash = auth::hash_secret(&secret)?;
+
+    let repo = ApiKeyRepository::new(pool);
+    repo.insert(&TenantId::new(tenant_uuid), key_id, &key_hash)
+        .await?;
+
+    println!("API key created successfully");
+    println!("  Tenant:  {tenant_name}");
+    println!("  API Key: {full_key}");
+    println!();
+    println!("Store this key securely — it will not be shown again.");
     Ok(())
 }
 

@@ -16,6 +16,14 @@ pub struct Cli {
 pub enum Command {
     Serve,
     Migrate,
+    ProvisionTenant {
+        #[arg(long)]
+        name: String,
+    },
+    CreateApiKey {
+        #[arg(long)]
+        tenant_name: String,
+    },
 }
 
 #[cfg(test)]
@@ -59,6 +67,29 @@ mod tests {
         ]);
         assert_eq!(cli.config, Some(PathBuf::from("/etc/kraalzibar.toml")));
         assert!(matches!(cli.command, Some(Command::Migrate)));
+    }
+
+    #[test]
+    fn cli_parses_provision_tenant() {
+        let cli = Cli::parse_from(["kraalzibar-server", "provision-tenant", "--name", "acme"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::ProvisionTenant { name }) if name == "acme"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_create_api_key() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "create-api-key",
+            "--tenant-name",
+            "acme",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::CreateApiKey { tenant_name }) if tenant_name == "acme"
+        ));
     }
 
     #[test]
