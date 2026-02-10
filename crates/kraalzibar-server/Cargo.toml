@@ -40,6 +40,8 @@ telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-ot
 [dev-dependencies]
 axum-test = "16"
 tempfile = "3"
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["postgres"] }
 tonic = { version = "0.12", features = ["transport"] }
 
 [build-dependencies]

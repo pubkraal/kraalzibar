@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod api_key_repository;
 pub mod audit;
 pub mod auth;
 pub mod cli;
