@@ -129,14 +129,30 @@ pub fn grpc_auth_interceptor(
     let (key_id, _) = auth::parse_api_key(raw_key)
         .map_err(|_| tonic::Status::unauthenticated("invalid api key format"))?;
 
-    // NOTE: The gRPC interceptor is sync. For async DB lookup, we use a blocking
-    // approach via cached data or spawn_blocking. For now, this interceptor is only
-    // used in dev mode. Production gRPC auth will use a tower layer in sub-phase 5
-    // if needed, but for now the closure-based authenticate() works with pre-fetched data.
-    let _ = key_id;
-    Err(tonic::Status::unauthenticated(
-        "gRPC API key auth requires async lookup — use REST or configure dev mode",
-    ))
+    let repo = auth_state.repository.as_ref().unwrap();
+
+    // The interceptor is sync but the DB lookup is async. Use block_in_place
+    // to bridge safely — this works on tokio's multi-threaded runtime (which
+    // the server always uses). The lookup is a fast indexed query.
+    let raw_key = raw_key.to_string();
+    let lookup_result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(repo.lookup_by_key_id(key_id))
+    })
+    .map_err(|e| {
+        tracing::error!(error = %e, "api key lookup failed");
+        tonic::Status::internal("internal server error")
+    })?;
+
+    match auth::authenticate(&raw_key, |_| lookup_result) {
+        Ok(ctx) => {
+            request.extensions_mut().insert(ctx.tenant_id);
+            Ok(request)
+        }
+        Err(auth::AuthError::RevokedKey) => {
+            Err(tonic::Status::unauthenticated("api key has been revoked"))
+        }
+        Err(_) => Err(tonic::Status::unauthenticated("invalid api key")),
+    }
 }
 
 fn error_json(status: StatusCode, msg: &str) -> Response {
@@ -274,6 +290,68 @@ mod tests {
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/invalid")
             .unwrap();
         Arc::new(ApiKeyRepository::new(pool))
+    }
+
+    #[tokio::test]
+    async fn grpc_dev_mode_injects_nil_tenant() {
+        let auth = AuthState::dev_mode();
+        let request = tonic::Request::new(());
+
+        let result = grpc_auth_interceptor(&auth, request);
+        assert!(result.is_ok());
+        let req = result.unwrap();
+        let tenant = req.extensions().get::<TenantId>().unwrap();
+        assert_eq!(*tenant.as_uuid(), uuid::Uuid::nil());
+    }
+
+    #[tokio::test]
+    async fn grpc_missing_auth_header_returns_unauthenticated() {
+        let repo = make_test_repo();
+        let auth = AuthState::with_repository(repo);
+        let request = tonic::Request::new(());
+
+        let result = grpc_auth_interceptor(&auth, request);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn grpc_invalid_key_format_returns_unauthenticated() {
+        let repo = make_test_repo();
+        let auth = AuthState::with_repository(repo);
+        let mut request = tonic::Request::new(());
+        request
+            .metadata_mut()
+            .insert("authorization", "Bearer not_valid".parse().unwrap());
+
+        let result = grpc_auth_interceptor(&auth, request);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn grpc_valid_format_key_attempts_db_lookup() {
+        let repo = make_test_repo();
+        let auth = AuthState::with_repository(repo);
+        let mut request = tonic::Request::new(());
+        request.metadata_mut().insert(
+            "authorization",
+            "Bearer kraalzibar_testkey1_12345678901234567890123456789012"
+                .parse()
+                .unwrap(),
+        );
+
+        let result = grpc_auth_interceptor(&auth, request);
+        // With an unreachable DB, the lookup fails → internal error (not unauthenticated stub)
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::Internal,
+            "expected Internal from DB error, got {:?}: {}",
+            status.code(),
+            status.message()
+        );
     }
 
     fn make_auth_server(auth: AuthState) -> TestServer {
