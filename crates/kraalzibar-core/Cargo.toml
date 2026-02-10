@@ -9,3 +9,10 @@ uuid = { version = "1", features = ["v4"] }
 pest = "2"
 pest_derive = "2"
 tokio = { version = "1", features = ["rt", "sync", "macros"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "check_engine"
+harness = false
