@@ -37,25 +37,39 @@ cargo build --release
 
 ### Run
 
+The server operates in two modes based on whether a database URL is configured:
+
+**Dev mode** (no database URL) — in-memory storage, no authentication:
+
 ```bash
-# With default config (in-memory storage, pretty logs)
+# Default config starts in dev mode
 cargo run --release
 
-# With a TOML config file
+# Or explicitly with no database section in TOML
 cargo run --release -- --config config.toml
+```
 
-# With environment variable overrides
-KRAALZIBAR_GRPC_PORT=50051 KRAALZIBAR_REST_PORT=8080 cargo run --release
+**Production mode** (database URL configured) — PostgreSQL storage, API key auth:
+
+```bash
+# Set database URL in config.toml or via environment variable
+KRAALZIBAR_DATABASE_URL="postgresql://user:pass@localhost:5432/kraalzibar" cargo run --release
 ```
 
 ### CLI Subcommands
 
 ```bash
 # Start the server (default)
-kraalzibar-server serve
+kraalzibar-server serve --config config.toml
 
 # Run database migrations
 kraalzibar-server migrate --config config.toml
+
+# Provision a new tenant
+kraalzibar-server provision-tenant --name acme --config config.toml
+
+# Create an API key for a tenant
+kraalzibar-server create-api-key --tenant-name acme --config config.toml
 ```
 
 ### Test
@@ -148,13 +162,12 @@ tests/
 
 ## Quick Start Guide
 
-The server currently runs with in-memory storage and a single implicit tenant.
-No authentication is required — you can start making API calls immediately.
+Without a database URL, the server runs in dev mode with in-memory storage and
+no authentication. You can start making API calls immediately.
 
-> **Note:** Data is stored in memory and lost when the server restarts.
-> PostgreSQL-backed persistent storage with per-tenant API key authentication
-> is implemented in the storage and auth libraries but not yet wired into the
-> server binary.
+> **Note:** In dev mode, data is stored in memory and lost when the server
+> restarts. Configure a database URL for persistent storage with API key
+> authentication (see [Tenant Setup](#tenant-setup-postgresql) below).
 
 ### 1. Start the server
 
@@ -340,9 +353,13 @@ const { allowed } = await client.checkPermission({
 **Go:**
 
 ```go
-client, _ := kraalzibar.NewClient("localhost:50051")
-allowed, _, _ := client.CheckPermission(ctx,
-    "document", "readme", "view", "user", "alice")
+client, _ := kraalzibar.NewClient("localhost:50051", kraalzibar.WithInsecure())
+resp, _ := client.CheckPermission(ctx, kraalzibar.CheckPermissionRequest{
+    Resource:   kraalzibar.ObjectRef{ObjectType: "document", ObjectID: "readme"},
+    Permission: "view",
+    Subject:    kraalzibar.DirectSubject("user", "alice"),
+})
+fmt.Println(resp.Allowed)
 ```
 
 **Rust:**
@@ -358,95 +375,54 @@ let result = client.check_permission(
 
 ### Tenant Setup (PostgreSQL)
 
-> **Status:** The PostgreSQL storage backend and API key authentication are
-> fully implemented in the library crates (`kraalzibar-storage`,
-> `kraalzibar-server/auth`) but the server binary does not yet wire them up —
-> it always uses in-memory storage with a single implicit tenant. The
-> information below documents how the system is designed to work once the
-> server startup is updated.
-
 When running with PostgreSQL, each tenant gets an isolated database schema.
 API keys authenticate requests and resolve to a tenant.
 
-**1. Run database migrations** to create the shared `tenants` and `api_keys`
-tables:
+**1. Configure the database** in `config.toml`:
+
+```toml
+[database]
+url = "postgresql://user:pass@localhost:5432/kraalzibar"
+```
+
+**2. Run migrations** to create the shared tables:
 
 ```bash
 kraalzibar-server migrate --config config.toml
 ```
 
-**2. Provision a tenant** by inserting into the `tenants` table and creating
-its isolated schema. This is currently a database-level operation (an admin
-CLI is planned):
+**3. Provision a tenant** using the CLI:
 
-```sql
--- Generate a tenant UUID
-INSERT INTO tenants (id, name, pg_schema)
-VALUES (
-  'a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6',
-  'acme-corp',
-  'tenant_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'
-);
+```bash
+kraalzibar-server provision-tenant --name acme --config config.toml
+# Output:
+#   Tenant provisioned successfully
+#     Name:      acme
+#     Tenant ID: a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6
 ```
 
-The `pg_schema` value must follow the format `tenant_<32-hex-chars>` (the
-UUID with hyphens removed).
+**4. Create an API key** for the tenant:
 
-**3. Create the tenant's schema** with its tables, indexes, and sequence.
-This is handled by `PostgresStoreFactory::provision_tenant()` in code, or
-manually:
-
-```sql
-CREATE SCHEMA tenant_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6;
-
-CREATE TABLE tenant_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.relation_tuples (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    object_type     TEXT NOT NULL,
-    object_id       TEXT NOT NULL,
-    relation        TEXT NOT NULL,
-    subject_type    TEXT NOT NULL,
-    subject_id      TEXT NOT NULL,
-    subject_relation TEXT,
-    created_tx_id   BIGINT NOT NULL,
-    deleted_tx_id   BIGINT NOT NULL DEFAULT 9223372036854775807,
-    UNIQUE NULLS NOT DISTINCT (object_type, object_id, relation,
-           subject_type, subject_id, subject_relation, deleted_tx_id)
-);
-
-CREATE TABLE tenant_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.schema_definitions (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    definition  TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE SEQUENCE tenant_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.tx_id_seq;
+```bash
+kraalzibar-server create-api-key --tenant-name acme --config config.toml
+# Output:
+#   API key created successfully
+#     Tenant:  acme
+#     API Key: kraalzibar_a1b2c3d4_s5t6u7v8w9x0y1z2a3b4c5d6e7f8g9h0
+#
+#   Store this key securely — it will not be shown again.
 ```
 
-**4. Generate an API key.** Keys follow the format
-`kraalzibar_<8-char-id>_<32-char-secret>`. The secret is hashed with Argon2
-before storage. You can generate one using the Rust library:
+Keys follow the format `kraalzibar_<8-char-id>_<32-char-secret>`. The secret
+is hashed with Argon2 before storage.
 
-```rust
-use kraalzibar_server::auth::{generate_api_key, hash_secret};
+**5. Start the server:**
 
-let (full_key, secret) = generate_api_key();
-let key_hash = hash_secret(&secret).unwrap();
-
-// Store key_hash in the api_keys table, give full_key to the tenant
-println!("API Key: {full_key}");
+```bash
+kraalzibar-server serve --config config.toml
 ```
 
-Then insert the hashed key:
-
-```sql
-INSERT INTO api_keys (tenant_id, key_hash)
-VALUES (
-  'a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6',
-  '$argon2id$v=19$m=19456,t=2,p=1$...'  -- output from hash_secret()
-);
-```
-
-**5. Use the API key** in requests via the `Authorization` header:
+**6. Use the API key** in requests via the `Authorization` header:
 
 ```bash
 curl -X POST http://localhost:8080/v1/permissions/check \
