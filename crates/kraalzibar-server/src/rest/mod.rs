@@ -65,6 +65,7 @@ async fn metrics_middleware<F: StoreFactory>(
         state.metrics.record_error();
     }
 
+    // /v1/schema uses HTTP method to distinguish write (POST) vs read (GET)
     let method_name = if path == "/v1/schema" {
         match http_method {
             axum::http::Method::POST => Some("write_schema"),

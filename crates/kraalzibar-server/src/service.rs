@@ -316,6 +316,8 @@ where
         self.schema_cache.invalidate(tenant_id).await;
         self.check_cache.invalidate_all();
 
+        // Schema writes don't produce a snapshot token (schemas aren't versioned
+        // in the tuple store), so the audit event has no token.
         audit::audit_schema_write(tenant_id, force, breaking_changes_overridden, None);
 
         Ok(WriteSchemaOutput {

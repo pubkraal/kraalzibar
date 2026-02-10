@@ -32,7 +32,7 @@ services:
       postgres:
         condition: service_healthy
       jaeger:
-        condition: service_started
+        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:latest
@@ -48,6 +48,11 @@ services:
     ports:
       - "4317:4317"
       - "16686:16686"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:14269/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   grafana:
     image: grafana/grafana:latest

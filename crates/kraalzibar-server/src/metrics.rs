@@ -491,6 +491,18 @@ mod tests {
     }
 
     #[test]
+    fn histogram_observe_exact_boundary_is_included() {
+        let h = Histogram::new();
+        // Observe a value exactly equal to a bucket boundary (0.01)
+        h.observe(0.01);
+        // Buckets: [0.001, 0.005, 0.01, ...]
+        assert_eq!(h.bucket_count(0), 0); // le=0.001: 0.01 > 0.001
+        assert_eq!(h.bucket_count(1), 0); // le=0.005: 0.01 > 0.005
+        assert_eq!(h.bucket_count(2), 1); // le=0.01: 0.01 <= 0.01 (exact match)
+        assert_eq!(h.bucket_count(3), 1); // le=0.025: 0.01 <= 0.025
+    }
+
+    #[test]
     fn method_metrics_new_starts_at_zero() {
         let mm = MethodMetrics::new();
         assert_eq!(mm.request_count(), 0);
