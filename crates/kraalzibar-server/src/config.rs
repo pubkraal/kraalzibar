@@ -146,6 +146,15 @@ impl DatabaseConfig {
     pub fn is_configured(&self) -> bool {
         !self.url.is_empty()
     }
+
+    pub fn require_configured(&self) -> Result<(), ConfigError> {
+        if self.url.is_empty() {
+            return Err(ConfigError::Validation(
+                "database URL is required for this command (set [database].url in config or KRAALZIBAR_DATABASE_URL env var)".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for EngineConfigValues {
@@ -662,6 +671,24 @@ max_lifetime_seconds = 900
             ..Default::default()
         };
         assert!(config.is_configured());
+    }
+
+    #[test]
+    fn require_database_rejects_empty_url() {
+        let config = DatabaseConfig::default();
+        let result = config.require_configured();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("database URL"))
+        );
+    }
+
+    #[test]
+    fn require_database_accepts_configured_url() {
+        let config = DatabaseConfig {
+            url: "postgresql://localhost/test".to_string(),
+            ..Default::default()
+        };
+        assert!(config.require_configured().is_ok());
     }
 
     #[test]

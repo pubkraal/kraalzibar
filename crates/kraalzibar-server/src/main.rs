@@ -88,6 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_migrate(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
     tracing::info!("running database migrations");
     let pool = sqlx::PgPool::connect(&config.database.url).await?;
     kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
@@ -99,6 +100,7 @@ async fn run_provision_tenant(
     config: &AppConfig,
     name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
     let pool = sqlx::PgPool::connect(&config.database.url).await?;
     kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
 
@@ -116,6 +118,7 @@ async fn run_create_api_key(
     config: &AppConfig,
     tenant_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
     let pool = sqlx::PgPool::connect(&config.database.url).await?;
     kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
 
