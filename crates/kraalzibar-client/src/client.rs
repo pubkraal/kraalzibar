@@ -359,7 +359,7 @@ pub struct ExpandPermissionTreeRequest {
     pub consistency: Consistency,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExpandPermissionTreeResponse {
     pub expanded_at: Option<SnapshotToken>,
     pub tree: Option<v1::PermissionExpansionTree>,

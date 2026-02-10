@@ -6,6 +6,7 @@ pub enum ClientError {
     InvalidArgument(String),
     NotFound(String),
     PermissionDenied(String),
+    Unauthenticated(String),
     FailedPrecondition(String),
     Internal(String),
     Timeout,
@@ -19,6 +20,7 @@ impl fmt::Display for ClientError {
             ClientError::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
             ClientError::NotFound(msg) => write!(f, "not found: {msg}"),
             ClientError::PermissionDenied(msg) => write!(f, "permission denied: {msg}"),
+            ClientError::Unauthenticated(msg) => write!(f, "unauthenticated: {msg}"),
             ClientError::FailedPrecondition(msg) => write!(f, "failed precondition: {msg}"),
             ClientError::Internal(msg) => write!(f, "internal error: {msg}"),
             ClientError::Timeout => write!(f, "request timed out"),
@@ -35,6 +37,9 @@ impl From<tonic::Status> for ClientError {
             tonic::Code::NotFound => ClientError::NotFound(status.message().to_string()),
             tonic::Code::PermissionDenied => {
                 ClientError::PermissionDenied(status.message().to_string())
+            }
+            tonic::Code::Unauthenticated => {
+                ClientError::Unauthenticated(status.message().to_string())
             }
             tonic::Code::InvalidArgument => {
                 ClientError::InvalidArgument(status.message().to_string())
@@ -104,5 +109,19 @@ mod tests {
 
         let err = ClientError::Connection("refused".to_string());
         assert_eq!(err.to_string(), "connection error: refused");
+    }
+
+    #[test]
+    fn client_error_from_tonic_status_unauthenticated() {
+        let status = tonic::Status::unauthenticated("invalid token");
+        let err: ClientError = status.into();
+
+        assert!(matches!(err, ClientError::Unauthenticated(msg) if msg == "invalid token"));
+    }
+
+    #[test]
+    fn client_error_unauthenticated_display() {
+        let err = ClientError::Unauthenticated("bad key".to_string());
+        assert_eq!(err.to_string(), "unauthenticated: bad key");
     }
 }

@@ -101,6 +101,26 @@ describe("error mapping", () => {
     }
   });
 
+  it("should map 422 response to RESOURCE_EXHAUSTED error", async () => {
+    const client = createClient({
+      target: "http://localhost:8080",
+      fetch: mockFetch(422, { error: "max depth exceeded" }),
+    });
+
+    try {
+      await client.checkPermission({
+        resource_type: "doc",
+        resource_id: "1",
+        permission: "view",
+        subject_type: "user",
+        subject_id: "alice",
+      });
+    } catch (e) {
+      expect(e).toBeInstanceOf(KraalzibarError);
+      expect((e as KraalzibarError).code).toBe("RESOURCE_EXHAUSTED");
+    }
+  });
+
   it("should map 500 response to INTERNAL error", async () => {
     const client = createClient({
       target: "http://localhost:8080",

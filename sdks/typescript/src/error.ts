@@ -3,6 +3,7 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "UNAUTHENTICATED"
   | "FAILED_PRECONDITION"
+  | "RESOURCE_EXHAUSTED"
   | "INTERNAL"
   | "UNKNOWN";
 
@@ -26,6 +27,8 @@ export const mapHttpStatus = (status: number): ErrorCode => {
       return "NOT_FOUND";
     case 412:
       return "FAILED_PRECONDITION";
+    case 422:
+      return "RESOURCE_EXHAUSTED";
     case 500:
       return "INTERNAL";
     default:

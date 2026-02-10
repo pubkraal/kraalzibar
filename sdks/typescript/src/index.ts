@@ -12,6 +12,7 @@ export type {
   LookupSubjectsResponse,
   ReadRelationshipsRequest,
   ReadRelationshipsResponse,
+  ReadSchemaResponse,
   RelationshipFilter,
   RelationshipResponse,
   RelationshipUpdate,

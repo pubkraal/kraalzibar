@@ -205,6 +205,7 @@ type LookupResourcesRequest struct {
 	ResourceType string
 	Permission   string
 	Subject      SubjectRef
+	Limit        uint32
 }
 
 // LookupResources finds all resources of a given type the subject has permission on.
@@ -213,10 +214,11 @@ func (c *Client) LookupResources(ctx context.Context, req LookupResourcesRequest
 	defer cancel()
 
 	stream, err := c.permissions.LookupResources(ctx, &pb.LookupResourcesRequest{
-		Consistency:  fullConsistency(),
-		ResourceType: req.ResourceType,
-		Permission:   req.Permission,
-		Subject:      subjectRefToProto(req.Subject),
+		Consistency:   fullConsistency(),
+		ResourceType:  req.ResourceType,
+		Permission:    req.Permission,
+		Subject:       subjectRefToProto(req.Subject),
+		OptionalLimit: req.Limit,
 	})
 	if err != nil {
 		return nil, errorFromStatus(err)

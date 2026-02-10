@@ -1,8 +1,18 @@
+use std::fmt;
+
 use tonic::service::Interceptor;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiKeyInterceptor {
     api_key: Option<String>,
+}
+
+impl fmt::Debug for ApiKeyInterceptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiKeyInterceptor")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 impl ApiKeyInterceptor {
@@ -49,5 +59,14 @@ mod tests {
         let result = interceptor.call(request).unwrap();
 
         assert!(result.metadata().get("authorization").is_none());
+    }
+
+    #[test]
+    fn api_key_interceptor_debug_redacts_key() {
+        let interceptor = ApiKeyInterceptor::new(Some("secret-key-abc".to_string()));
+        let debug_output = format!("{interceptor:?}");
+
+        assert!(!debug_output.contains("secret-key-abc"));
+        assert!(debug_output.contains("[REDACTED]"));
     }
 }
