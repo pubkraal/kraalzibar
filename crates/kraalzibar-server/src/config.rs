@@ -231,6 +231,26 @@ impl AppConfig {
         {
             self.engine.max_depth = n;
         }
+        if let Some(v) = env("KRAALZIBAR_CACHE_SCHEMA_CAPACITY")
+            && let Ok(n) = v.parse()
+        {
+            self.cache.schema_cache_capacity = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_CACHE_SCHEMA_TTL")
+            && let Ok(n) = v.parse()
+        {
+            self.cache.schema_cache_ttl_seconds = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_CACHE_CHECK_CAPACITY")
+            && let Ok(n) = v.parse()
+        {
+            self.cache.check_cache_capacity = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_CACHE_CHECK_TTL")
+            && let Ok(n) = v.parse()
+        {
+            self.cache.check_cache_ttl_seconds = n;
+        }
         if let Some(v) = env("KRAALZIBAR_LOG_LEVEL") {
             self.log.level = v;
         }
@@ -262,6 +282,11 @@ impl AppConfig {
         if self.database.max_connections == 0 {
             return Err(ConfigError::Validation(
                 "database.max_connections must be non-zero".to_string(),
+            ));
+        }
+        if self.database.min_connections > self.database.max_connections {
+            return Err(ConfigError::Validation(
+                "database.min_connections must be <= max_connections".to_string(),
             ));
         }
         if self.database.acquire_timeout_seconds == 0 {
@@ -591,5 +616,38 @@ max_lifetime_seconds = 900
         assert_eq!(config.database.acquire_timeout_seconds, 15);
         assert_eq!(config.database.idle_timeout_seconds, 120);
         assert_eq!(config.database.max_lifetime_seconds, 600);
+    }
+
+    #[test]
+    fn cache_config_env_overrides() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_CACHE_SCHEMA_CAPACITY" => Some("500".to_string()),
+                "KRAALZIBAR_CACHE_SCHEMA_TTL" => Some("60".to_string()),
+                "KRAALZIBAR_CACHE_CHECK_CAPACITY" => Some("5000".to_string()),
+                "KRAALZIBAR_CACHE_CHECK_TTL" => Some("120".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.cache.schema_cache_capacity, 500);
+        assert_eq!(config.cache.schema_cache_ttl_seconds, 60);
+        assert_eq!(config.cache.check_cache_capacity, 5000);
+        assert_eq!(config.cache.check_cache_ttl_seconds, 120);
+    }
+
+    #[test]
+    fn database_config_rejects_min_exceeding_max_connections() {
+        let mut config = AppConfig::default();
+        config.database.min_connections = 20;
+        config.database.max_connections = 5;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("min_connections")),
+            "expected validation error for min > max: {result:?}"
+        );
     }
 }

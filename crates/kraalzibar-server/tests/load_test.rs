@@ -216,16 +216,12 @@ async fn load_test_cache_warm_vs_cold() {
         )
     };
 
-    // Cold run: first check populates both schema and check caches
+    // Cold check: first call populates both schema and check caches
     let cold_start = Instant::now();
-    for _ in 0..100 {
-        // Invalidate check cache to force cold checks
-        // (schema cache stays warm after first call)
-        service.check_permission(&tenant_id, input()).await.unwrap();
-    }
+    service.check_permission(&tenant_id, input()).await.unwrap();
     let cold_elapsed = cold_start.elapsed();
 
-    // Warm run: all checks should hit both caches (same snapshot)
+    // Warm run: all checks hit both schema and check caches (same snapshot key)
     let warm_start = Instant::now();
     for _ in 0..100 {
         service.check_permission(&tenant_id, input()).await.unwrap();
@@ -233,18 +229,9 @@ async fn load_test_cache_warm_vs_cold() {
     let warm_elapsed = warm_start.elapsed();
 
     eprintln!(
-        "load_test_cache: cold 100 checks in {:.2?} ({:.2?}/check), warm 100 checks in {:.2?} ({:.2?}/check)",
+        "load_test_cache: 1 cold check in {:.2?}, 100 warm checks in {:.2?} ({:.2?}/check)",
         cold_elapsed,
-        cold_elapsed / 100,
         warm_elapsed,
         warm_elapsed / 100,
-    );
-
-    // The warm run should be faster (or at most equal) since most checks
-    // hit the cache. We don't assert a specific ratio since CI environments
-    // can be noisy, but log the comparison for manual inspection.
-    eprintln!(
-        "load_test_cache: warm/cold ratio: {:.2}x",
-        cold_elapsed.as_secs_f64() / warm_elapsed.as_secs_f64().max(f64::MIN_POSITIVE),
     );
 }
