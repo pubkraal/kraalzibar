@@ -51,14 +51,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let factory = Arc::new(InMemoryStoreFactory::new());
-    let service = Arc::new(AuthzService::with_cache_config(
-        Arc::clone(&factory),
-        config.to_engine_config(),
-        config.to_schema_limits(),
-        config.cache.clone(),
-    ));
-
     let metrics = Arc::new(Metrics::new());
+    let service = Arc::new(
+        AuthzService::with_cache_config(
+            Arc::clone(&factory),
+            config.to_engine_config(),
+            config.to_schema_limits(),
+            config.cache.clone(),
+        )
+        .with_metrics(Arc::clone(&metrics)),
+    );
 
     // TODO: Replace with tenant resolution from auth middleware
     let tenant_id = TenantId::new(uuid::Uuid::nil());

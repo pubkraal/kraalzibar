@@ -14,6 +14,7 @@ use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 use crate::adapter::StoreTupleReader;
 use crate::config::CacheConfig;
 use crate::error::ApiError;
+use crate::metrics::Metrics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Consistency {
@@ -106,6 +107,7 @@ pub struct AuthzService<F: StoreFactory> {
     schema_limits: SchemaLimits,
     schema_cache: moka::future::Cache<TenantId, Arc<Schema>>,
     check_cache: moka::future::Cache<CheckCacheKey, bool>,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> AuthzService<F>
@@ -141,7 +143,13 @@ where
             schema_limits,
             schema_cache,
             check_cache,
+            metrics: None,
         }
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     pub async fn check_permission(
@@ -167,12 +175,18 @@ where
             };
 
             if let Some(cached_allowed) = self.check_cache.get(&cache_key).await {
+                if let Some(m) = &self.metrics {
+                    m.record_check_cache_hit();
+                }
                 return Ok(CheckPermissionOutput {
                     allowed: cached_allowed,
                     snapshot,
                 });
             }
 
+            if let Some(m) = &self.metrics {
+                m.record_check_cache_miss();
+            }
             let schema = self.load_schema_cached(tenant_id, &*store).await?;
             let reader = StoreTupleReader::new(Arc::clone(&store));
             let engine = CheckEngine::new(Arc::new(reader), schema, self.engine_config.clone());
@@ -396,9 +410,15 @@ where
         store: &impl SchemaStore,
     ) -> Result<Arc<Schema>, ApiError> {
         if let Some(cached) = self.schema_cache.get(tenant_id).await {
+            if let Some(m) = &self.metrics {
+                m.record_schema_cache_hit();
+            }
             return Ok(cached);
         }
 
+        if let Some(m) = &self.metrics {
+            m.record_schema_cache_miss();
+        }
         let schema_text = store.read_schema().await?.ok_or(ApiError::SchemaNotFound)?;
         let schema = Arc::new(parse_schema(&schema_text)?);
         self.schema_cache
@@ -1691,5 +1711,122 @@ mod tests {
             "FullConsistency lookup_subjects should return snapshot token"
         );
         assert!(!output.subjects.is_empty());
+    }
+
+    // --- 4F: Cache Metrics Tests ---
+
+    fn make_counting_service_with_metrics() -> (
+        AuthzService<CountingStoreFactory>,
+        TenantId,
+        Arc<CountingStoreFactory>,
+        Arc<Metrics>,
+    ) {
+        let factory = Arc::new(CountingStoreFactory::new());
+        let metrics = Arc::new(Metrics::new());
+        let service = AuthzService::new(
+            Arc::clone(&factory),
+            EngineConfig::default(),
+            SchemaLimits::default(),
+        )
+        .with_metrics(Arc::clone(&metrics));
+        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
+        (service, tenant_id, factory, metrics)
+    }
+
+    #[tokio::test]
+    async fn schema_cache_hit_increments_metric() {
+        let (service, tenant_id, _factory, metrics) = make_counting_service_with_metrics();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        // First check_permission loads schema (cache miss)
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::MinimizeLatency,
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.schema_cache_misses(), 1);
+        assert_eq!(metrics.schema_cache_hits(), 0);
+
+        // Second call hits schema cache
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::MinimizeLatency,
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.schema_cache_hits(), 1);
+    }
+
+    #[tokio::test]
+    async fn check_cache_hit_increments_metric() {
+        let (service, tenant_id, _factory, metrics) = make_counting_service_with_metrics();
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        let token = write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        // First check with snapshot (cache miss)
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.check_cache_misses(), 1);
+        assert_eq!(metrics.check_cache_hits(), 0);
+
+        // Second check with same snapshot (cache hit)
+        service
+            .check_permission(
+                &tenant_id,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.check_cache_hits(), 1);
     }
 }
