@@ -13,15 +13,13 @@ use super::conversions;
 
 pub struct RelationshipServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
-    tenant_id: TenantId,
     metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> RelationshipServiceImpl<F> {
-    pub fn new(service: Arc<AuthzService<F>>, tenant_id: TenantId) -> Self {
+    pub fn new(service: Arc<AuthzService<F>>) -> Self {
         Self {
             service,
-            tenant_id,
             metrics: None,
         }
     }
@@ -30,6 +28,15 @@ impl<F: StoreFactory> RelationshipServiceImpl<F> {
         self.metrics = Some(metrics);
         self
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn extract_tenant_id<T>(request: &Request<T>) -> Result<TenantId, Status> {
+    request
+        .extensions()
+        .get::<TenantId>()
+        .cloned()
+        .ok_or_else(|| Status::unauthenticated("missing tenant context"))
 }
 
 #[tonic::async_trait]
@@ -43,6 +50,7 @@ where
         request: Request<v1::WriteRelationshipsRequest>,
     ) -> Result<Response<v1::WriteRelationshipsResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let mut writes = Vec::new();
@@ -80,7 +88,7 @@ where
 
         let token = self
             .service
-            .write_relationships(&self.tenant_id, &writes, &deletes)
+            .write_relationships(&tenant_id, &writes, &deletes)
             .await
             .map_err(super::api_error_to_status)?;
 
@@ -98,6 +106,7 @@ where
         request: Request<v1::ReadRelationshipsRequest>,
     ) -> Result<Response<v1::ReadRelationshipsResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let filter = req
@@ -116,7 +125,7 @@ where
 
         let tuples = self
             .service
-            .read_relationships(&self.tenant_id, &filter, consistency, limit)
+            .read_relationships(&tenant_id, &filter, consistency, limit)
             .await
             .map_err(super::api_error_to_status)?;
 

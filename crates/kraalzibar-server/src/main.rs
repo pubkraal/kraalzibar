@@ -165,8 +165,7 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
         .with_metrics(Arc::clone(&metrics)),
     );
 
-    // TODO: Replace with tenant resolution from auth middleware
-    let tenant_id = TenantId::new(uuid::Uuid::nil());
+    let default_tenant = TenantId::new(uuid::Uuid::nil());
 
     let (mut health_reporter, health_service) = create_health_service();
     health_reporter
@@ -178,29 +177,42 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
 
     const MAX_GRPC_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
-    let permission_svc = PermissionServiceServer::new(
-        PermissionServiceImpl::new(Arc::clone(&service), tenant_id.clone())
-            .with_metrics(Arc::clone(&metrics)),
-    )
-    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
-    let relationship_svc = RelationshipServiceServer::new(
-        RelationshipServiceImpl::new(Arc::clone(&service), tenant_id.clone())
-            .with_metrics(Arc::clone(&metrics)),
-    )
-    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
-    let schema_svc = SchemaServiceServer::new(
-        SchemaServiceImpl::new(Arc::clone(&service), tenant_id.clone())
-            .with_metrics(Arc::clone(&metrics)),
-    )
-    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
+    let tenant_interceptor = {
+        let tenant = default_tenant.clone();
+        move |mut req: tonic::Request<()>| -> Result<tonic::Request<()>, tonic::Status> {
+            req.extensions_mut().insert(tenant.clone());
+            Ok(req)
+        }
+    };
+
+    let permission_svc = tonic::service::interceptor::InterceptedService::new(
+        PermissionServiceServer::new(
+            PermissionServiceImpl::new(Arc::clone(&service)).with_metrics(Arc::clone(&metrics)),
+        )
+        .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+        tenant_interceptor.clone(),
+    );
+    let relationship_svc = tonic::service::interceptor::InterceptedService::new(
+        RelationshipServiceServer::new(
+            RelationshipServiceImpl::new(Arc::clone(&service)).with_metrics(Arc::clone(&metrics)),
+        )
+        .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+        tenant_interceptor.clone(),
+    );
+    let schema_svc = tonic::service::interceptor::InterceptedService::new(
+        SchemaServiceServer::new(
+            SchemaServiceImpl::new(Arc::clone(&service)).with_metrics(Arc::clone(&metrics)),
+        )
+        .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+        tenant_interceptor,
+    );
 
     // REST server with metrics endpoint
     let rest_state = rest::AppState {
         service: Arc::clone(&service),
-        tenant_id,
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = rest::create_router(rest_state).route(
+    let rest_router = rest::create_router(rest_state, default_tenant).route(
         "/metrics",
         axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
     );

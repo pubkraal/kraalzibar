@@ -17,15 +17,13 @@ use super::conversions;
 
 pub struct PermissionServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
-    tenant_id: TenantId,
     metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> PermissionServiceImpl<F> {
-    pub fn new(service: Arc<AuthzService<F>>, tenant_id: TenantId) -> Self {
+    pub fn new(service: Arc<AuthzService<F>>) -> Self {
         Self {
             service,
-            tenant_id,
             metrics: None,
         }
     }
@@ -34,6 +32,15 @@ impl<F: StoreFactory> PermissionServiceImpl<F> {
         self.metrics = Some(metrics);
         self
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn extract_tenant_id<T>(request: &Request<T>) -> Result<TenantId, Status> {
+    request
+        .extensions()
+        .get::<TenantId>()
+        .cloned()
+        .ok_or_else(|| Status::unauthenticated("missing tenant context"))
 }
 
 #[tonic::async_trait]
@@ -47,6 +54,7 @@ where
         request: Request<v1::CheckPermissionRequest>,
     ) -> Result<Response<v1::CheckPermissionResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let resource = req
@@ -67,7 +75,7 @@ where
 
         let result = self
             .service
-            .check_permission(&self.tenant_id, input)
+            .check_permission(&tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 
@@ -92,6 +100,7 @@ where
         request: Request<v1::ExpandPermissionTreeRequest>,
     ) -> Result<Response<v1::ExpandPermissionTreeResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let resource = req
@@ -107,7 +116,7 @@ where
 
         let output = self
             .service
-            .expand_permission_tree(&self.tenant_id, input)
+            .expand_permission_tree(&tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 
@@ -128,6 +137,7 @@ where
         request: Request<v1::LookupResourcesRequest>,
     ) -> Result<Response<Self::LookupResourcesStream>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let subject = req
@@ -149,7 +159,7 @@ where
 
         let output = self
             .service
-            .lookup_resources(&self.tenant_id, input)
+            .lookup_resources(&tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 
@@ -179,6 +189,7 @@ where
         request: Request<v1::LookupSubjectsRequest>,
     ) -> Result<Response<Self::LookupSubjectsStream>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let resource = req
@@ -195,7 +206,7 @@ where
 
         let output = self
             .service
-            .lookup_subjects(&self.tenant_id, input)
+            .lookup_subjects(&tenant_id, input)
             .await
             .map_err(api_error_to_status)?;
 

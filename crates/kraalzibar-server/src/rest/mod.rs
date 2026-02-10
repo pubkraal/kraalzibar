@@ -18,7 +18,6 @@ use crate::service::AuthzService;
 
 pub struct AppState<F: StoreFactory> {
     pub service: Arc<AuthzService<F>>,
-    pub tenant_id: TenantId,
     pub metrics: Arc<Metrics>,
 }
 
@@ -26,7 +25,6 @@ impl<F: StoreFactory> Clone for AppState<F> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
-            tenant_id: self.tenant_id.clone(),
             metrics: self.metrics.clone(),
         }
     }
@@ -83,7 +81,7 @@ async fn metrics_middleware<F: StoreFactory>(
     response
 }
 
-pub fn create_router<F>(state: AppState<F>) -> Router
+pub fn create_router<F>(state: AppState<F>, default_tenant: TenantId) -> Router
 where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
@@ -106,6 +104,7 @@ where
         .route("/v1/watch", get(handlers::watch))
         .route("/healthz", get(handlers::healthz))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_SIZE))
+        .layer(axum::Extension(default_tenant))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             metrics_middleware,

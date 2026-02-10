@@ -11,15 +11,13 @@ use crate::service::AuthzService;
 
 pub struct SchemaServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
-    tenant_id: TenantId,
     metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> SchemaServiceImpl<F> {
-    pub fn new(service: Arc<AuthzService<F>>, tenant_id: TenantId) -> Self {
+    pub fn new(service: Arc<AuthzService<F>>) -> Self {
         Self {
             service,
-            tenant_id,
             metrics: None,
         }
     }
@@ -28,6 +26,15 @@ impl<F: StoreFactory> SchemaServiceImpl<F> {
         self.metrics = Some(metrics);
         self
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn extract_tenant_id<T>(request: &Request<T>) -> Result<TenantId, Status> {
+    request
+        .extensions()
+        .get::<TenantId>()
+        .cloned()
+        .ok_or_else(|| Status::unauthenticated("missing tenant context"))
 }
 
 #[tonic::async_trait]
@@ -41,11 +48,12 @@ where
         request: Request<v1::WriteSchemaRequest>,
     ) -> Result<Response<v1::WriteSchemaResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let result = self
             .service
-            .write_schema(&self.tenant_id, &req.schema, req.force)
+            .write_schema(&tenant_id, &req.schema, req.force)
             .await
             .map_err(super::api_error_to_status)?;
 
@@ -61,12 +69,13 @@ where
 
     async fn read_schema(
         &self,
-        _request: Request<v1::ReadSchemaRequest>,
+        request: Request<v1::ReadSchemaRequest>,
     ) -> Result<Response<v1::ReadSchemaResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let schema = self
             .service
-            .read_schema(&self.tenant_id)
+            .read_schema(&tenant_id)
             .await
             .map_err(super::api_error_to_status)?;
 
