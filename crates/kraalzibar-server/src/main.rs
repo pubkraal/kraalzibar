@@ -75,20 +75,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const MAX_GRPC_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
-    let permission_svc = PermissionServiceServer::new(PermissionServiceImpl::new(
-        Arc::clone(&service),
-        tenant_id.clone(),
-    ))
+    let permission_svc = PermissionServiceServer::new(
+        PermissionServiceImpl::new(Arc::clone(&service), tenant_id.clone())
+            .with_metrics(Arc::clone(&metrics)),
+    )
     .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
-    let relationship_svc = RelationshipServiceServer::new(RelationshipServiceImpl::new(
-        Arc::clone(&service),
-        tenant_id.clone(),
-    ))
+    let relationship_svc = RelationshipServiceServer::new(
+        RelationshipServiceImpl::new(Arc::clone(&service), tenant_id.clone())
+            .with_metrics(Arc::clone(&metrics)),
+    )
     .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
-    let schema_svc = SchemaServiceServer::new(SchemaServiceImpl::new(
-        Arc::clone(&service),
-        tenant_id.clone(),
-    ))
+    let schema_svc = SchemaServiceServer::new(
+        SchemaServiceImpl::new(Arc::clone(&service), tenant_id.clone())
+            .with_metrics(Arc::clone(&metrics)),
+    )
     .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE);
 
     // REST server with metrics endpoint
