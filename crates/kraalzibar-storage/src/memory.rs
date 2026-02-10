@@ -458,7 +458,7 @@ mod tests {
     async fn rewrite_deleted_tuple_creates_new_version() {
         let store = InMemoryStore::new();
         let w = make_write("doc", "1", "viewer", direct_user("a"));
-        store.write(&[w.clone()], &[]).await.unwrap();
+        store.write(std::slice::from_ref(&w), &[]).await.unwrap();
 
         let delete_filter = TupleFilter {
             object_type: Some("doc".to_string()),

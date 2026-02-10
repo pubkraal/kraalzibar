@@ -132,7 +132,7 @@ async fn load_test_10000_tuples_lookup_resources() {
     let writes: Vec<TupleWrite> = (0..10_000)
         .map(|i| {
             TupleWrite::new(
-                ObjectRef::new("document", &format!("doc{i}")),
+                ObjectRef::new("document", format!("doc{i}")),
                 "viewer",
                 SubjectRef::direct("user", "alice"),
             )
