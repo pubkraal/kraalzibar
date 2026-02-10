@@ -12,6 +12,7 @@ use kraalzibar_core::tuple::{SnapshotToken, SubjectRef, TenantId, Tuple, TupleFi
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::adapter::StoreTupleReader;
+use crate::audit;
 use crate::config::CacheConfig;
 use crate::error::ApiError;
 use crate::metrics::Metrics;
@@ -263,6 +264,7 @@ where
         let store = self.factory.for_tenant(tenant_id);
         let token = store.write(writes, deletes).await?;
         self.check_cache.invalidate_all();
+        audit::audit_relationship_write(tenant_id, writes.len(), deletes.len(), &token);
         Ok(token)
     }
 
@@ -308,6 +310,8 @@ where
         store.write_schema(definition).await?;
         self.schema_cache.invalidate(tenant_id).await;
         self.check_cache.invalidate_all();
+
+        audit::audit_schema_write(tenant_id, force, breaking_changes_overridden, None);
 
         Ok(WriteSchemaOutput {
             breaking_changes_overridden,
@@ -1828,5 +1832,126 @@ mod tests {
             .unwrap();
 
         assert_eq!(metrics.check_cache_hits(), 1);
+    }
+
+    // --- 6B: Audit Logging Tests ---
+
+    mod audit_test_helpers {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Debug)]
+        pub struct CapturedEvent {
+            pub target: String,
+            pub fields: Vec<(String, String)>,
+        }
+
+        struct TestLayer {
+            events: Arc<Mutex<Vec<CapturedEvent>>>,
+        }
+
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for TestLayer {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _ctx: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                let mut fields = Vec::new();
+                let mut visitor = FieldVisitor(&mut fields);
+                event.record(&mut visitor);
+                self.events.lock().unwrap().push(CapturedEvent {
+                    target: event.metadata().target().to_string(),
+                    fields,
+                });
+            }
+        }
+
+        struct FieldVisitor<'a>(&'a mut Vec<(String, String)>);
+
+        impl tracing::field::Visit for FieldVisitor<'_> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .push((field.name().to_string(), format!("{value:?}")));
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                self.0.push((field.name().to_string(), value.to_string()));
+            }
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                self.0.push((field.name().to_string(), value.to_string()));
+            }
+            fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+                self.0.push((field.name().to_string(), value.to_string()));
+            }
+        }
+
+        pub fn make_subscriber() -> (
+            impl tracing::Subscriber + Send + Sync,
+            Arc<Mutex<Vec<CapturedEvent>>>,
+        ) {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let layer = TestLayer {
+                events: Arc::clone(&events),
+            };
+            let subscriber = tracing_subscriber::registry().with(layer);
+            (subscriber, events)
+        }
+
+        pub fn has_field(event: &CapturedEvent, key: &str, value: &str) -> bool {
+            event.fields.iter().any(|(k, v)| k == key && v == value)
+        }
+    }
+
+    #[tokio::test]
+    async fn service_write_schema_emits_audit_event() {
+        let (service, tenant_id) = make_service();
+        let (subscriber, events) = audit_test_helpers::make_subscriber();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        service
+            .write_schema(&tenant_id, SCHEMA, false)
+            .await
+            .unwrap();
+
+        drop(_guard);
+
+        let events = Arc::try_unwrap(events).unwrap().into_inner().unwrap();
+        let audit_events: Vec<_> = events.iter().filter(|e| e.target == "audit").collect();
+        assert!(
+            !audit_events.is_empty(),
+            "write_schema should emit audit event"
+        );
+        assert!(audit_test_helpers::has_field(
+            audit_events[0],
+            "event",
+            "schema_write"
+        ));
+    }
+
+    #[tokio::test]
+    async fn service_write_relationships_emits_audit_event() {
+        let (service, tenant_id) = make_service();
+        let (subscriber, events) = audit_test_helpers::make_subscriber();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        drop(_guard);
+
+        let events = Arc::try_unwrap(events).unwrap().into_inner().unwrap();
+        let audit_events: Vec<_> = events.iter().filter(|e| e.target == "audit").collect();
+        assert!(
+            !audit_events.is_empty(),
+            "write_relationships should emit audit event"
+        );
+        assert!(audit_test_helpers::has_field(
+            audit_events[0],
+            "event",
+            "relationship_write"
+        ));
     }
 }
