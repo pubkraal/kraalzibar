@@ -28,6 +28,7 @@ If there is no failing test demanding the code, do not write the code.
 - Use conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`
 - When a phase is complete, present the branch for review before merging to
   `main`. Do not merge without explicit approval.
+- After merging a PR, delete the feature branch (both local and remote).
 
 ### Commit Discipline
 
@@ -225,3 +226,33 @@ configuration instructions as they become available.
 - **Clippy `derivable_impls`**: If a `Default` impl just selects a specific enum
   variant, use `#[derive(Default)]` with `#[default]` attribute on the variant
   instead of a manual `impl Default`.
+- **`OpenTelemetryLayer` is typed to bare `Registry`**: When building a layered
+  tracing subscriber, the OTel layer must be `.with()`'d directly onto the
+  `Registry` before any other layers (like `EnvFilter`). If added after
+  `EnvFilter`, the type mismatch (`Layer<Layered<EnvFilter, Registry>>` vs
+  `Layer<Registry>`) produces confusing compile errors. Layer order:
+  `Registry → OTel → EnvFilter → fmt`.
+- **OTel test with real OTLP connection hangs on drop**: Creating a real
+  `TracerProvider` with OTLP export in tests spawns background threads that
+  hang on `drop()`/`shutdown()` when no collector is running. Only test the
+  disabled path (`init_telemetry` returns `None`); skip tests that create real
+  providers.
+- **Hand-rolled Prometheus histograms**: Store f64 sum as `AtomicU64` using
+  `f64::to_bits()`/`f64::from_bits()`. Use `fetch_update` with
+  `Ordering::Relaxed` to atomically add to the sum. Bucket boundaries are a
+  `const` array; `+Inf` bucket always equals `_count`.
+- **Capturing tracing events in tests**: Create a custom `Layer` that stores
+  events in `Arc<Mutex<Vec<CapturedEvent>>>`. Use
+  `tracing::subscriber::set_default()` (not `set_global_default`) which returns
+  a guard — this avoids conflicts between parallel tests.
+- **Capturing tracing spans in tests**: Similar pattern but implement
+  `on_new_span` instead of `on_event`. Use `span.extensions_mut().insert()` to
+  tag spans, then read back in `on_close`.
+- **Feature-gated optional deps pattern**: Use `dep:crate_name` syntax in
+  `[features]` to avoid auto-creating a feature per optional dep. Wrap code
+  with `#[cfg(feature = "telemetry")]` and provide stub functions for the
+  `#[cfg(not(feature = "telemetry"))]` case.
+- **`std::mem::forget` for long-lived providers**: OTel `TracerProvider` must
+  live for the process lifetime. Leaking it with `std::mem::forget` is
+  intentional — the OS reclaims resources on exit. This avoids blocking
+  shutdown while the OTLP exporter drains.
