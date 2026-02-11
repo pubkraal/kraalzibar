@@ -269,3 +269,8 @@ configuration instructions as they become available.
 - **Adding trait methods to `RelationshipStore`** requires updating all
   implementations (InMemory, Postgres) AND test wrappers like `CountingStore`.
   The compiler catches missing impls but it's easy to forget test helpers.
+- **OTel Collector contrib image has no shell tools**: The
+  `otel/opentelemetry-collector-contrib` image is scratch-based — `wget`,
+  `curl`, and `sh` are not available. Docker healthchecks using these tools
+  will always fail. Use `condition: service_started` instead of
+  `service_healthy` for dependencies on the collector.
