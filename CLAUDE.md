@@ -170,9 +170,9 @@ configuration instructions as they become available.
   loads the schema (from cache or storage), builds an engine, and evaluates.
 - **`EngineConfig` needs `Clone`** since the service creates engines per-request.
   Added `#[derive(Clone)]` in Phase 3.
-- **`lookup_resources`** scans all tuples for a type, deduplicates object IDs,
-  then checks each one. Default limit is 1000. This is O(n) and correct but
-  slow for large datasets — optimize in later phases.
+- **`lookup_resources`** uses `list_object_ids` (SELECT DISTINCT on Postgres,
+  filter+dedup on InMemory) to get candidate IDs, then checks each one.
+  Default limit is 1000.
 - **Never expose storage errors to clients.** Use generic "internal server error"
   message in both gRPC Status and REST JSON responses. Log the real error
   server-side with `tracing::error!`.
@@ -263,3 +263,9 @@ configuration instructions as they become available.
   live for the process lifetime. Leaking it with `std::mem::forget` is
   intentional — the OS reclaims resources on exit. This avoids blocking
   shutdown while the OTLP exporter drains.
+- **`read_relationships` returns `ReadRelationshipsOutput`** with both `tuples`
+  and `snapshot`. gRPC wires `read_at` ZedToken; REST includes `read_at` string
+  with `skip_serializing_if = "Option::is_none"`.
+- **Adding trait methods to `RelationshipStore`** requires updating all
+  implementations (InMemory, Postgres) AND test wrappers like `CountingStore`.
+  The compiler catches missing impls but it's easy to forget test helpers.
