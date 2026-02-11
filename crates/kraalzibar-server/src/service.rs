@@ -380,16 +380,9 @@ where
         let store = Arc::new(store);
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
 
-        let filter = TupleFilter {
-            object_type: Some(input.resource_type.clone()),
-            ..Default::default()
-        };
-        let tuples = store.read(&filter, snapshot, None).await?;
-
-        let mut object_ids: Vec<String> =
-            tuples.iter().map(|t| t.object.object_id.clone()).collect();
-        object_ids.sort();
-        object_ids.dedup();
+        let object_ids = store
+            .list_object_ids(&input.resource_type, snapshot, None)
+            .await?;
 
         let schema = self.load_schema_cached(tenant_id, &*store).await?;
 
@@ -531,6 +524,16 @@ mod tests {
         }
         async fn snapshot(&self) -> Result<ST, StorageError> {
             self.inner.snapshot().await
+        }
+        async fn list_object_ids(
+            &self,
+            object_type: &str,
+            snapshot: Option<ST>,
+            limit: Option<usize>,
+        ) -> Result<Vec<String>, StorageError> {
+            self.inner
+                .list_object_ids(object_type, snapshot, limit)
+                .await
         }
     }
 

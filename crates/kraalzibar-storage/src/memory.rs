@@ -190,6 +190,44 @@ impl RelationshipStore for InMemoryStore {
         let state = self.state.lock().unwrap();
         Ok(SnapshotToken::new(state.current_tx))
     }
+
+    async fn list_object_ids(
+        &self,
+        object_type: &str,
+        snapshot: Option<SnapshotToken>,
+        limit: Option<usize>,
+    ) -> Result<Vec<String>, StorageError> {
+        let state = self.state.lock().unwrap();
+
+        let snap = match snapshot {
+            Some(token) => {
+                let val = token.value();
+                if val > state.current_tx {
+                    return Err(StorageError::SnapshotAhead {
+                        requested: val,
+                        current: state.current_tx,
+                    });
+                }
+                val
+            }
+            None => state.current_tx,
+        };
+
+        let mut ids: Vec<String> = state
+            .tuples
+            .iter()
+            .filter(|t| t.visible_at(snap) && t.object_type == object_type)
+            .map(|t| t.object_id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+
+        if let Some(n) = limit {
+            ids.truncate(n);
+        }
+
+        Ok(ids)
+    }
 }
 
 impl SchemaStore for InMemoryStore {
@@ -766,6 +804,116 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_object_ids_returns_distinct_ids() {
+        let store = InMemoryStore::new();
+        store
+            .write(
+                &[
+                    make_write("doc", "readme", "viewer", direct_user("a")),
+                    make_write("doc", "readme", "editor", direct_user("b")),
+                    make_write("doc", "design", "viewer", direct_user("a")),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let ids = store.list_object_ids("doc", None, None).await.unwrap();
+
+        assert_eq!(ids, vec!["design", "readme"]);
+    }
+
+    #[tokio::test]
+    async fn list_object_ids_filters_by_snapshot() {
+        let store = InMemoryStore::new();
+        let snap = store
+            .write(&[make_write("doc", "1", "viewer", direct_user("a"))], &[])
+            .await
+            .unwrap();
+        store
+            .write(&[make_write("doc", "2", "viewer", direct_user("b"))], &[])
+            .await
+            .unwrap();
+
+        let ids = store
+            .list_object_ids("doc", Some(snap), None)
+            .await
+            .unwrap();
+
+        assert_eq!(ids, vec!["1"]);
+    }
+
+    #[tokio::test]
+    async fn list_object_ids_respects_limit() {
+        let store = InMemoryStore::new();
+        store
+            .write(
+                &[
+                    make_write("doc", "1", "viewer", direct_user("a")),
+                    make_write("doc", "2", "viewer", direct_user("b")),
+                    make_write("doc", "3", "viewer", direct_user("c")),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let ids = store.list_object_ids("doc", None, Some(2)).await.unwrap();
+
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_object_ids_excludes_deleted() {
+        let store = InMemoryStore::new();
+        store
+            .write(
+                &[
+                    make_write("doc", "1", "viewer", direct_user("a")),
+                    make_write("doc", "2", "viewer", direct_user("b")),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            object_id: Some("1".to_string()),
+            ..Default::default()
+        };
+        store.write(&[], &[delete_filter]).await.unwrap();
+
+        let ids = store.list_object_ids("doc", None, None).await.unwrap();
+
+        assert_eq!(ids, vec!["2"]);
+    }
+
+    #[tokio::test]
+    async fn list_object_ids_empty_for_unknown_type() {
+        let store = InMemoryStore::new();
+        store
+            .write(&[make_write("doc", "1", "viewer", direct_user("a"))], &[])
+            .await
+            .unwrap();
+
+        let ids = store.list_object_ids("folder", None, None).await.unwrap();
+
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_object_ids_rejects_snapshot_ahead() {
+        let store = InMemoryStore::new();
+
+        let result = store
+            .list_object_ids("doc", Some(SnapshotToken::new(999)), None)
+            .await;
+
+        assert!(matches!(result, Err(StorageError::SnapshotAhead { .. })));
     }
 
     #[tokio::test]
