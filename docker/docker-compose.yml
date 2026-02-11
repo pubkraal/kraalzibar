@@ -27,11 +27,11 @@ services:
       KRAALZIBAR_LOG_FORMAT: "json"
       KRAALZIBAR_LOG_LEVEL: "info"
       KRAALZIBAR_TRACING_ENABLED: "true"
-      KRAALZIBAR_TRACING_OTLP_ENDPOINT: "http://jaeger:4317"
+      KRAALZIBAR_TRACING_OTLP_ENDPOINT: "http://otel-collector:4317"
     depends_on:
       postgres:
         condition: service_healthy
-      jaeger:
+      otel-collector:
         condition: service_healthy
 
   prometheus:
@@ -43,16 +43,28 @@ services:
     depends_on:
       - server
 
-  jaeger:
-    image: jaegertracing/all-in-one:latest
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
     ports:
       - "4317:4317"
-      - "16686:16686"
+    depends_on:
+      - tempo
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:14269/ || exit 1"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:13133/"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
 
   grafana:
     image: grafana/grafana:latest
@@ -66,7 +78,8 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
-      - jaeger
+      - tempo
 
 volumes:
   pgdata:
+  tempo-data:

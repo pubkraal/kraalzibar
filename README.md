@@ -90,20 +90,22 @@ cd sdks/typescript && npm test
 
 ### Docker Compose
 
-The full observability stack includes PostgreSQL, Prometheus, Jaeger, and Grafana:
+The full observability stack includes PostgreSQL, Prometheus, OTel Collector,
+Tempo, and Grafana:
 
 ```bash
 cd docker && docker compose up -d
 ```
 
-| Service    | URL                        | Purpose                    |
-|------------|----------------------------|----------------------------|
-| gRPC       | `localhost:50051`          | gRPC API                   |
-| REST       | `localhost:8080`           | REST API + `/metrics`      |
-| Prometheus | `http://localhost:9090`    | Metrics dashboard          |
-| Jaeger     | `http://localhost:16686`   | Distributed traces         |
-| Grafana    | `http://localhost:3000`    | Dashboards (admin/admin)   |
-| PostgreSQL | `localhost:5432`           | Persistent storage         |
+| Service        | URL                        | Purpose                       |
+|----------------|----------------------------|-------------------------------|
+| gRPC           | `localhost:50051`          | gRPC API                      |
+| REST           | `localhost:8080`           | REST API + `/metrics`         |
+| Prometheus     | `http://localhost:9090`    | Metrics storage + queries     |
+| OTel Collector | `localhost:4317`           | OTLP trace pipeline           |
+| Tempo          | `http://localhost:3200`    | Trace storage (TraceQL)       |
+| Grafana        | `http://localhost:3000`    | Dashboards (admin/admin)      |
+| PostgreSQL     | `localhost:5432`           | Persistent storage            |
 
 ### Configuration
 
