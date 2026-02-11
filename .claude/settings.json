@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr *)",
+      "Bash(gh api *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); if echo \"$input\" | grep -q 'git push'; then echo 'REMINDER: You just pushed to a remote branch. Check if there is an open PR for this branch (use gh pr view). If a PR exists, you MUST run the pr-reviewer agent (Task tool with subagent_type=pr-reviewer) to review the PR before continuing with other work.'; fi; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

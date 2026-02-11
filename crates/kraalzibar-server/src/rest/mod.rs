@@ -8,17 +8,16 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::middleware;
 use axum::response::Response;
 use axum::routing::{get, post};
-use kraalzibar_core::tuple::TenantId;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 const MAX_REQUEST_BODY_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
 use crate::metrics::Metrics;
+use crate::middleware::{AuthState, rest_auth_middleware};
 use crate::service::AuthzService;
 
 pub struct AppState<F: StoreFactory> {
     pub service: Arc<AuthzService<F>>,
-    pub tenant_id: TenantId,
     pub metrics: Arc<Metrics>,
 }
 
@@ -26,7 +25,6 @@ impl<F: StoreFactory> Clone for AppState<F> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
-            tenant_id: self.tenant_id.clone(),
             metrics: self.metrics.clone(),
         }
     }
@@ -83,7 +81,7 @@ async fn metrics_middleware<F: StoreFactory>(
     response
 }
 
-pub fn create_router<F>(state: AppState<F>) -> Router
+pub fn create_router<F>(state: AppState<F>, auth_state: AuthState) -> Router
 where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
@@ -106,6 +104,10 @@ where
         .route("/v1/watch", get(handlers::watch))
         .route("/healthz", get(handlers::healthz))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_SIZE))
+        .layer(middleware::from_fn_with_state(
+            auth_state.clone(),
+            rest_auth_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             metrics_middleware,

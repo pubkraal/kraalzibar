@@ -1,3 +1,4 @@
+use axum::Extension;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -5,7 +6,9 @@ use axum::response::IntoResponse;
 use serde::Serialize;
 
 use kraalzibar_core::engine::ExpandTree;
-use kraalzibar_core::tuple::{ObjectRef, SnapshotToken, SubjectRef, TupleFilter, TupleWrite};
+use kraalzibar_core::tuple::{
+    ObjectRef, SnapshotToken, SubjectRef, TenantId, TupleFilter, TupleWrite,
+};
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::error::ApiError;
@@ -101,6 +104,7 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
 
 pub async fn check_permission<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<CheckPermissionRequest>,
 ) -> impl IntoResponse
 where
@@ -128,11 +132,7 @@ where
         },
     };
 
-    match state
-        .service
-        .check_permission(&state.tenant_id, input)
-        .await
-    {
+    match state.service.check_permission(&tenant_id, input).await {
         Ok(result) => {
             let checked_at = result.snapshot.map(|s| s.value().to_string());
             json_response(
@@ -149,6 +149,7 @@ where
 
 pub async fn expand_permission<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<ExpandPermissionRequest>,
 ) -> impl IntoResponse
 where
@@ -174,7 +175,7 @@ where
 
     match state
         .service
-        .expand_permission_tree(&state.tenant_id, input)
+        .expand_permission_tree(&tenant_id, input)
         .await
     {
         Ok(output) => {
@@ -227,6 +228,7 @@ fn expand_tree_to_json(tree: &ExpandTree) -> serde_json::Value {
 
 pub async fn lookup_resources<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<LookupResourcesRequest>,
 ) -> impl IntoResponse
 where
@@ -253,11 +255,7 @@ where
         limit: req.limit.map(|l| l.min(10_000)),
     };
 
-    match state
-        .service
-        .lookup_resources(&state.tenant_id, input)
-        .await
-    {
+    match state.service.lookup_resources(&tenant_id, input).await {
         Ok(output) => json_response(
             StatusCode::OK,
             &LookupResourcesResponse {
@@ -271,6 +269,7 @@ where
 
 pub async fn lookup_subjects<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<LookupSubjectsRequest>,
 ) -> impl IntoResponse
 where
@@ -296,7 +295,7 @@ where
         },
     };
 
-    match state.service.lookup_subjects(&state.tenant_id, input).await {
+    match state.service.lookup_subjects(&tenant_id, input).await {
         Ok(output) => {
             let subjects: Vec<SubjectResponse> = output
                 .subjects
@@ -321,6 +320,7 @@ where
 
 pub async fn write_relationships<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<WriteRelationshipsRequest>,
 ) -> impl IntoResponse
 where
@@ -374,7 +374,7 @@ where
 
     match state
         .service
-        .write_relationships(&state.tenant_id, &writes, &deletes)
+        .write_relationships(&tenant_id, &writes, &deletes)
         .await
     {
         Ok(token) => json_response(
@@ -389,6 +389,7 @@ where
 
 pub async fn read_relationships<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<ReadRelationshipsRequest>,
 ) -> impl IntoResponse
 where
@@ -416,7 +417,7 @@ where
 
     match state
         .service
-        .read_relationships(&state.tenant_id, &filter, consistency, limit)
+        .read_relationships(&tenant_id, &filter, consistency, limit)
         .await
     {
         Ok(tuples) => {
@@ -439,6 +440,7 @@ where
 
 pub async fn write_schema<F>(
     State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
     Json(req): Json<WriteSchemaRequest>,
 ) -> impl IntoResponse
 where
@@ -447,7 +449,7 @@ where
 {
     match state
         .service
-        .write_schema(&state.tenant_id, &req.schema, req.force)
+        .write_schema(&tenant_id, &req.schema, req.force)
         .await
     {
         Ok(result) => json_response(
@@ -460,12 +462,15 @@ where
     }
 }
 
-pub async fn read_schema<F>(State(state): State<AppState<F>>) -> impl IntoResponse
+pub async fn read_schema<F>(
+    State(state): State<AppState<F>>,
+    Extension(tenant_id): Extension<TenantId>,
+) -> impl IntoResponse
 where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
-    match state.service.read_schema(&state.tenant_id).await {
+    match state.service.read_schema(&tenant_id).await {
         Ok(Some(schema)) => json_response(StatusCode::OK, &ReadSchemaResponse { schema }),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "no schema has been written"),
         Err(e) => api_error_to_response(e),
@@ -483,11 +488,11 @@ pub async fn healthz() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::super::{AppState, create_router};
+    use crate::middleware::AuthState;
     use crate::service::AuthzService;
     use axum_test::TestServer;
     use kraalzibar_core::engine::EngineConfig;
     use kraalzibar_core::schema::SchemaLimits;
-    use kraalzibar_core::tuple::TenantId;
     use kraalzibar_storage::InMemoryStoreFactory;
     use serde_json::json;
     use std::sync::Arc;
@@ -504,14 +509,12 @@ mod tests {
             EngineConfig::default(),
             SchemaLimits::default(),
         ));
-        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
         let metrics = Arc::new(crate::metrics::Metrics::new());
         let state = AppState {
             service,
-            tenant_id,
             metrics: Arc::clone(&metrics),
         };
-        let app = create_router(state);
+        let app = create_router(state, AuthState::dev_mode());
         (TestServer::new(app).unwrap(), metrics)
     }
 

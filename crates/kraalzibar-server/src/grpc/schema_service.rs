@@ -2,24 +2,23 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use kraalzibar_core::tuple::TenantId;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::metrics::Metrics;
 use crate::proto::kraalzibar::v1::{self, schema_service_server::SchemaService};
 use crate::service::AuthzService;
 
+use super::extract_tenant_id;
+
 pub struct SchemaServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
-    tenant_id: TenantId,
     metrics: Option<Arc<Metrics>>,
 }
 
 impl<F: StoreFactory> SchemaServiceImpl<F> {
-    pub fn new(service: Arc<AuthzService<F>>, tenant_id: TenantId) -> Self {
+    pub fn new(service: Arc<AuthzService<F>>) -> Self {
         Self {
             service,
-            tenant_id,
             metrics: None,
         }
     }
@@ -41,11 +40,12 @@ where
         request: Request<v1::WriteSchemaRequest>,
     ) -> Result<Response<v1::WriteSchemaResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
         let result = self
             .service
-            .write_schema(&self.tenant_id, &req.schema, req.force)
+            .write_schema(&tenant_id, &req.schema, req.force)
             .await
             .map_err(super::api_error_to_status)?;
 
@@ -61,12 +61,13 @@ where
 
     async fn read_schema(
         &self,
-        _request: Request<v1::ReadSchemaRequest>,
+        request: Request<v1::ReadSchemaRequest>,
     ) -> Result<Response<v1::ReadSchemaResponse>, Status> {
         let start = std::time::Instant::now();
+        let tenant_id = extract_tenant_id(&request)?;
         let schema = self
             .service
-            .read_schema(&self.tenant_id)
+            .read_schema(&tenant_id)
             .await
             .map_err(super::api_error_to_status)?;
 

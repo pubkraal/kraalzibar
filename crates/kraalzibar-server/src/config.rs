@@ -132,13 +132,28 @@ impl Default for RestConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "postgresql://localhost:5432/kraalzibar".to_string(),
+            url: String::new(),
             max_connections: 10,
             min_connections: 0,
             acquire_timeout_seconds: 30,
             idle_timeout_seconds: 600,
             max_lifetime_seconds: 1800,
         }
+    }
+}
+
+impl DatabaseConfig {
+    pub fn is_configured(&self) -> bool {
+        !self.url.is_empty()
+    }
+
+    pub fn require_configured(&self) -> Result<(), ConfigError> {
+        if self.url.is_empty() {
+            return Err(ConfigError::Validation(
+                "database URL is required for this command (set [database].url in config or KRAALZIBAR_DATABASE_URL env var)".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -314,30 +329,32 @@ impl AppConfig {
                 "engine.max_depth must be non-zero".to_string(),
             ));
         }
-        if self.database.max_connections == 0 {
-            return Err(ConfigError::Validation(
-                "database.max_connections must be non-zero".to_string(),
-            ));
-        }
-        if self.database.min_connections > self.database.max_connections {
-            return Err(ConfigError::Validation(
-                "database.min_connections must be <= max_connections".to_string(),
-            ));
-        }
-        if self.database.acquire_timeout_seconds == 0 {
-            return Err(ConfigError::Validation(
-                "database.acquire_timeout_seconds must be non-zero".to_string(),
-            ));
-        }
-        if self.database.idle_timeout_seconds == 0 {
-            return Err(ConfigError::Validation(
-                "database.idle_timeout_seconds must be non-zero".to_string(),
-            ));
-        }
-        if self.database.max_lifetime_seconds == 0 {
-            return Err(ConfigError::Validation(
-                "database.max_lifetime_seconds must be non-zero".to_string(),
-            ));
+        if self.database.is_configured() {
+            if self.database.max_connections == 0 {
+                return Err(ConfigError::Validation(
+                    "database.max_connections must be non-zero".to_string(),
+                ));
+            }
+            if self.database.min_connections > self.database.max_connections {
+                return Err(ConfigError::Validation(
+                    "database.min_connections must be <= max_connections".to_string(),
+                ));
+            }
+            if self.database.acquire_timeout_seconds == 0 {
+                return Err(ConfigError::Validation(
+                    "database.acquire_timeout_seconds must be non-zero".to_string(),
+                ));
+            }
+            if self.database.idle_timeout_seconds == 0 {
+                return Err(ConfigError::Validation(
+                    "database.idle_timeout_seconds must be non-zero".to_string(),
+                ));
+            }
+            if self.database.max_lifetime_seconds == 0 {
+                return Err(ConfigError::Validation(
+                    "database.max_lifetime_seconds must be non-zero".to_string(),
+                ));
+            }
         }
         if self.engine.max_concurrent_branches == 0 {
             return Err(ConfigError::Validation(
@@ -635,11 +652,55 @@ max_lifetime_seconds = 900
     #[test]
     fn database_config_validates_pool_settings() {
         let mut config = AppConfig::default();
+        config.database.url = "postgresql://localhost/test".to_string();
         config.database.acquire_timeout_seconds = 0;
 
         let result = config.validate();
         assert!(
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("acquire_timeout_seconds"))
+        );
+    }
+
+    #[test]
+    fn database_is_configured_reflects_url() {
+        let config = DatabaseConfig::default();
+        assert!(!config.is_configured());
+
+        let config = DatabaseConfig {
+            url: "postgresql://localhost/test".to_string(),
+            ..Default::default()
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn require_database_rejects_empty_url() {
+        let config = DatabaseConfig::default();
+        let result = config.require_configured();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("database URL"))
+        );
+    }
+
+    #[test]
+    fn require_database_accepts_configured_url() {
+        let config = DatabaseConfig {
+            url: "postgresql://localhost/test".to_string(),
+            ..Default::default()
+        };
+        assert!(config.require_configured().is_ok());
+    }
+
+    #[test]
+    fn database_config_skips_pool_validation_when_unconfigured() {
+        let mut config = AppConfig::default();
+        config.database.acquire_timeout_seconds = 0;
+        config.database.max_connections = 0;
+
+        let result = config.validate();
+        assert!(
+            result.is_ok(),
+            "pool validation should be skipped when database URL is empty"
         );
     }
 
@@ -686,6 +747,7 @@ max_lifetime_seconds = 900
     #[test]
     fn database_config_rejects_min_exceeding_max_connections() {
         let mut config = AppConfig::default();
+        config.database.url = "postgresql://localhost/test".to_string();
         config.database.min_connections = 20;
         config.database.max_connections = 5;
 

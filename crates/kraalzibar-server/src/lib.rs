@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod api_key_repository;
 pub mod audit;
 pub mod auth;
 pub mod cli;
@@ -7,6 +8,7 @@ pub mod error;
 pub mod grpc;
 pub mod health;
 pub mod metrics;
+pub mod middleware;
 pub mod proto;
 pub mod rest;
 pub mod service;

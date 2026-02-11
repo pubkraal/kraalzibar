@@ -29,16 +29,26 @@ async fn start_server() -> (String, tokio::task::JoinHandle<()>) {
         SchemaLimits::default(),
     ));
 
-    let permission_svc = PermissionServiceServer::new(PermissionServiceImpl::new(
-        Arc::clone(&service),
-        tenant_id.clone(),
-    ));
-    let relationship_svc = RelationshipServiceServer::new(RelationshipServiceImpl::new(
-        Arc::clone(&service),
-        tenant_id.clone(),
-    ));
-    let schema_svc =
-        SchemaServiceServer::new(SchemaServiceImpl::new(Arc::clone(&service), tenant_id));
+    let tenant_interceptor = {
+        let tenant = tenant_id;
+        move |mut req: tonic::Request<()>| -> Result<tonic::Request<()>, tonic::Status> {
+            req.extensions_mut().insert(tenant.clone());
+            Ok(req)
+        }
+    };
+
+    let permission_svc = tonic::service::interceptor::InterceptedService::new(
+        PermissionServiceServer::new(PermissionServiceImpl::new(Arc::clone(&service))),
+        tenant_interceptor.clone(),
+    );
+    let relationship_svc = tonic::service::interceptor::InterceptedService::new(
+        RelationshipServiceServer::new(RelationshipServiceImpl::new(Arc::clone(&service))),
+        tenant_interceptor.clone(),
+    );
+    let schema_svc = tonic::service::interceptor::InterceptedService::new(
+        SchemaServiceServer::new(SchemaServiceImpl::new(Arc::clone(&service))),
+        tenant_interceptor,
+    );
 
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 

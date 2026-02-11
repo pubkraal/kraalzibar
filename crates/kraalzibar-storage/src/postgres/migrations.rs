@@ -33,7 +33,8 @@ pub async fn run_shared_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
         CREATE TABLE IF NOT EXISTS api_keys (
             id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             tenant_id   UUID NOT NULL REFERENCES tenants(id),
-            key_hash    TEXT NOT NULL UNIQUE,
+            key_id      TEXT NOT NULL UNIQUE,
+            key_hash    TEXT NOT NULL,
             created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
             revoked_at  TIMESTAMPTZ
         )

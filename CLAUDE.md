@@ -30,6 +30,13 @@ If there is no failing test demanding the code, do not write the code.
   `main`. Do not merge without explicit approval.
 - After merging a PR, delete the feature branch (both local and remote).
 
+### Automated PR Review
+
+After every `git push` to a branch that has an open GitHub PR, **automatically
+run the pr-reviewer agent** to review the PR. This is mandatory and must not be
+skipped. The review should check for TDD compliance, code quality, test
+coverage, and adherence to project conventions.
+
 ### Commit Discipline
 
 - Run `cargo test` before every commit — all tests must pass
