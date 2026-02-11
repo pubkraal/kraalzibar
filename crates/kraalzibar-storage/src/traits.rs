@@ -27,6 +27,13 @@ pub trait RelationshipStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Tuple>, StorageError>> + Send;
 
     fn snapshot(&self) -> impl Future<Output = Result<SnapshotToken, StorageError>> + Send;
+
+    fn list_object_ids(
+        &self,
+        object_type: &str,
+        snapshot: Option<SnapshotToken>,
+        limit: Option<usize>,
+    ) -> impl Future<Output = Result<Vec<String>, StorageError>> + Send;
 }
 
 pub trait SchemaStore: Send + Sync {

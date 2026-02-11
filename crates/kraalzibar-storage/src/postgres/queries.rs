@@ -228,6 +228,34 @@ pub async fn read_tuples<'e>(
     Ok(tuples)
 }
 
+pub async fn list_distinct_object_ids<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    schema: &str,
+    object_type: &str,
+    snapshot: i64,
+    limit: Option<usize>,
+) -> Result<Vec<String>, StorageError> {
+    let limit_clause = match limit {
+        Some(n) => format!(" LIMIT {n}"),
+        None => String::new(),
+    };
+    let query = format!(
+        r#"SELECT DISTINCT object_id
+           FROM {schema}.relation_tuples
+           WHERE object_type = $1 AND created_tx_id <= $2 AND deleted_tx_id > $2
+           ORDER BY object_id{limit_clause}"#
+    );
+
+    let rows: Vec<(String,)> = sqlx::query_as(&query)
+        .bind(object_type)
+        .bind(snapshot)
+        .fetch_all(executor)
+        .await
+        .map_err(to_storage_error)?;
+
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 pub async fn write_schema_definition<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     schema: &str,

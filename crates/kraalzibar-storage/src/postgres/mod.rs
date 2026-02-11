@@ -88,6 +88,32 @@ impl RelationshipStore for PostgresStore {
         #[allow(clippy::cast_sign_loss)]
         Ok(SnapshotToken::new(current as u64))
     }
+
+    async fn list_object_ids(
+        &self,
+        object_type: &str,
+        snapshot: Option<SnapshotToken>,
+        limit: Option<usize>,
+    ) -> Result<Vec<String>, StorageError> {
+        let snap = match snapshot {
+            Some(token) => {
+                let val = token.value();
+                let current = queries::current_tx_id(&self.pool, &self.schema).await?;
+                #[allow(clippy::cast_sign_loss)]
+                if val > current as u64 {
+                    return Err(StorageError::SnapshotAhead {
+                        requested: val,
+                        #[allow(clippy::cast_sign_loss)]
+                        current: current as u64,
+                    });
+                }
+                val as i64
+            }
+            None => queries::current_tx_id(&self.pool, &self.schema).await?,
+        };
+
+        queries::list_distinct_object_ids(&self.pool, &self.schema, object_type, snap, limit).await
+    }
 }
 
 impl SchemaStore for PostgresStore {
@@ -350,6 +376,45 @@ mod pg_tests {
             .await
             .unwrap();
         assert!(results_b.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_list_object_ids() {
+        let (pool, _container) = setup_pg().await;
+        let factory = PostgresStoreFactory::new(pool);
+        let tenant_id = TenantId::new(Uuid::new_v4());
+        factory
+            .provision_tenant(&tenant_id, "test-list-ids")
+            .await
+            .unwrap();
+
+        let store = factory.for_tenant(&tenant_id);
+
+        store
+            .write(
+                &[
+                    make_write("doc", "readme", "viewer", SubjectRef::direct("user", "a")),
+                    make_write("doc", "readme", "editor", SubjectRef::direct("user", "b")),
+                    make_write("doc", "design", "viewer", SubjectRef::direct("user", "a")),
+                    make_write("folder", "root", "viewer", SubjectRef::direct("user", "a")),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let ids = store.list_object_ids("doc", None, None).await.unwrap();
+        assert_eq!(ids, vec!["design", "readme"]);
+
+        let ids = store.list_object_ids("folder", None, None).await.unwrap();
+        assert_eq!(ids, vec!["root"]);
+
+        let ids = store.list_object_ids("doc", None, Some(1)).await.unwrap();
+        assert_eq!(ids.len(), 1);
+
+        let ids = store.list_object_ids("unknown", None, None).await.unwrap();
+        assert!(ids.is_empty());
     }
 
     #[tokio::test]
