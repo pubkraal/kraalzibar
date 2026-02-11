@@ -122,6 +122,8 @@ pub struct RelationshipFilterRequest {
 #[derive(Debug, Serialize)]
 pub struct ReadRelationshipsResponse {
     pub relationships: Vec<RelationshipResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

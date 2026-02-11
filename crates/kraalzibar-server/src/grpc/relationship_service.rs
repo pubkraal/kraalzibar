@@ -113,7 +113,7 @@ where
             Some(1000)
         };
 
-        let tuples = self
+        let output = self
             .service
             .read_relationships(&tenant_id, &filter, consistency, limit)
             .await
@@ -123,13 +123,14 @@ where
             m.record_method_request("read_relationships", start.elapsed());
         }
 
-        let relationships: Vec<_> = tuples
+        let relationships: Vec<_> = output
+            .tuples
             .iter()
             .map(conversions::domain_tuple_to_proto)
             .collect();
 
         Ok(Response::new(v1::ReadRelationshipsResponse {
-            read_at: None,
+            read_at: conversions::snapshot_to_zed_token(output.snapshot),
             relationships,
         }))
     }

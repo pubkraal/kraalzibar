@@ -87,6 +87,12 @@ pub struct LookupSubjectsOutput {
 }
 
 #[derive(Debug)]
+pub struct ReadRelationshipsOutput {
+    pub tuples: Vec<Tuple>,
+    pub snapshot: Option<SnapshotToken>,
+}
+
+#[derive(Debug)]
 pub struct WriteSchemaOutput {
     pub breaking_changes_overridden: bool,
 }
@@ -278,10 +284,11 @@ where
         filter: &TupleFilter,
         consistency: Consistency,
         limit: Option<usize>,
-    ) -> Result<Vec<Tuple>, ApiError> {
+    ) -> Result<ReadRelationshipsOutput, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
         let snapshot = self.resolve_snapshot(&store, consistency).await?;
-        Ok(store.read(filter, snapshot, limit).await?)
+        let tuples = store.read(filter, snapshot, limit).await?;
+        Ok(ReadRelationshipsOutput { tuples, snapshot })
     }
 
     #[tracing::instrument(skip(self, definition), fields(%tenant_id))]
@@ -715,13 +722,13 @@ mod tests {
             object_type: Some("document".to_string()),
             ..Default::default()
         };
-        let tuples = service
+        let output = service
             .read_relationships(&tenant_id, &filter, Consistency::MinimizeLatency, None)
             .await
             .unwrap();
 
-        assert_eq!(tuples.len(), 1);
-        assert_eq!(tuples[0].subject.subject_id, "alice");
+        assert_eq!(output.tuples.len(), 1);
+        assert_eq!(output.tuples[0].subject.subject_id, "alice");
         assert!(token.value() > 0);
     }
 
@@ -740,7 +747,7 @@ mod tests {
         .await;
 
         let filter = TupleFilter::default();
-        let tuples = service
+        let output = service
             .read_relationships(
                 &tenant_id,
                 &filter,
@@ -750,7 +757,50 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tuples.len(), 1, "should only see tuples at snapshot");
+        assert_eq!(output.tuples.len(), 1, "should only see tuples at snapshot");
+    }
+
+    #[tokio::test]
+    async fn read_relationships_returns_snapshot_with_full_consistency() {
+        let (service, tenant_id) = make_service();
+
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        let filter = TupleFilter::default();
+        let output = service
+            .read_relationships(&tenant_id, &filter, Consistency::FullConsistency, None)
+            .await
+            .unwrap();
+
+        assert!(
+            output.snapshot.is_some(),
+            "FullConsistency should return a snapshot"
+        );
+        assert!(output.snapshot.unwrap().value() > 0);
+    }
+
+    #[tokio::test]
+    async fn read_relationships_returns_no_snapshot_with_minimize_latency() {
+        let (service, tenant_id) = make_service();
+
+        write_tuple(
+            &service, &tenant_id, "document", "readme", "viewer", "user", "alice",
+        )
+        .await;
+
+        let filter = TupleFilter::default();
+        let output = service
+            .read_relationships(&tenant_id, &filter, Consistency::MinimizeLatency, None)
+            .await
+            .unwrap();
+
+        assert!(
+            output.snapshot.is_none(),
+            "MinimizeLatency should not return a snapshot"
+        );
     }
 
     #[tokio::test]

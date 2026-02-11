@@ -420,8 +420,9 @@ where
         .read_relationships(&tenant_id, &filter, consistency, limit)
         .await
     {
-        Ok(tuples) => {
-            let relationships: Vec<RelationshipResponse> = tuples
+        Ok(output) => {
+            let relationships: Vec<RelationshipResponse> = output
+                .tuples
                 .iter()
                 .map(|t| RelationshipResponse {
                     resource_type: t.object.object_type.clone(),
@@ -432,7 +433,13 @@ where
                     subject_relation: t.subject.subject_relation.clone(),
                 })
                 .collect();
-            json_response(StatusCode::OK, &ReadRelationshipsResponse { relationships })
+            json_response(
+                StatusCode::OK,
+                &ReadRelationshipsResponse {
+                    relationships,
+                    read_at: output.snapshot.map(|s| s.value().to_string()),
+                },
+            )
         }
         Err(e) => api_error_to_response(e),
     }
@@ -906,6 +913,47 @@ mod tests {
         assert!(
             body["looked_up_at"].is_string(),
             "lookup_subjects response should include looked_up_at token: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_relationships_returns_snapshot_with_full_consistency() {
+        let server = make_test_server();
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        let response = server
+            .post("/v1/relationships/read")
+            .json(&json!({
+                "filter": {"resource_type": "document"},
+                "consistency": {"type": "full"}
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["read_at"].is_string(),
+            "read_relationships with full consistency should include read_at: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_relationships_omits_snapshot_without_consistency() {
+        let server = make_test_server();
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        let response = server
+            .post("/v1/relationships/read")
+            .json(&json!({
+                "filter": {"resource_type": "document"}
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(
+            body.get("read_at").is_none(),
+            "read_relationships without consistency should omit read_at: {body}"
         );
     }
 
