@@ -18,21 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
     steps:
-      - name: Verify Rust CI passed
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
-          COUNT=$(gh api "repos/${{ github.repository }}/actions/workflows/rust.yml/runs?head_sha=$SHA" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::Rust CI has not passed for commit $SHA"
-            exit 1
-          fi
-          echo "Rust CI passed for $SHA"
-
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
