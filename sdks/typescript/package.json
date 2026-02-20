@@ -1,6 +1,6 @@
 {
   "name": "@kraalzibar/client",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "TypeScript SDK for Kraalzibar authorization server",
   "type": "module",
   "main": "dist/index.js",
