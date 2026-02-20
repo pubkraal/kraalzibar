@@ -41,7 +41,8 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
-      - server
+      server:
+        condition: service_healthy
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest

@@ -107,6 +107,30 @@ cd docker && docker compose up -d
 | Grafana        | `http://localhost:3000`    | Dashboards (admin/admin)      |
 | PostgreSQL     | `localhost:5432`           | Persistent storage            |
 
+### Docker Hub
+
+Pre-built images are available on Docker Hub:
+
+```bash
+docker pull pubkraal/kraalzibar-server:latest
+```
+
+**Dev mode** (in-memory, no auth):
+
+```bash
+docker run -p 50051:50051 -p 8080:8080 pubkraal/kraalzibar-server:latest
+```
+
+**Production mode** (PostgreSQL, API key auth):
+
+```bash
+docker run -p 50051:50051 -p 8080:8080 \
+  -e KRAALZIBAR_DATABASE_URL="postgresql://user:pass@host:5432/kraalzibar" \
+  pubkraal/kraalzibar-server:latest serve
+```
+
+Tags: `latest` (most recent release), `v1.2.3` / `1.2.3` (specific version), `main` (rolling edge from main branch).
+
 ### Configuration
 
 Configuration uses TOML with environment variable overrides (`KRAALZIBAR_` prefix):
