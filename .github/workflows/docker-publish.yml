@@ -23,7 +23,7 @@ jobs:
           check-name: Check, Test, Lint
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           running-workflow-name: Docker Hub Publish
-          wait-interval: 15
+          wait-interval: 30
           allowed-conclusions: success
           fail-on-no-checks: false
 
@@ -34,7 +34,7 @@ jobs:
           check-name: Docker Build & Health Check
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           running-workflow-name: Docker Hub Publish
-          wait-interval: 15
+          wait-interval: 30
           allowed-conclusions: success
           fail-on-no-checks: false
 
