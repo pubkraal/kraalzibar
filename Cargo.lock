@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "kraalzibar-client"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "kraalzibar-core",
  "kraalzibar-server",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "kraalzibar-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "pest",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "kraalzibar-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "axum 0.7.9",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "kraalzibar-storage"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "kraalzibar-core",
  "sqlx",
