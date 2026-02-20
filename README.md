@@ -121,15 +121,21 @@ docker pull pubkraal/kraalzibar-server:latest
 docker run -p 50051:50051 -p 8080:8080 pubkraal/kraalzibar-server:latest
 ```
 
-**Production mode** (PostgreSQL, API key auth):
+**Production mode** (PostgreSQL, API key auth) — run migrations first, then start the server:
 
 ```bash
+# Run migrations (first time only)
+docker run --rm \
+  -e KRAALZIBAR_DATABASE_URL="postgresql://user:pass@host:5432/kraalzibar" \
+  pubkraal/kraalzibar-server:latest migrate
+
+# Start the server
 docker run -p 50051:50051 -p 8080:8080 \
   -e KRAALZIBAR_DATABASE_URL="postgresql://user:pass@host:5432/kraalzibar" \
   pubkraal/kraalzibar-server:latest serve
 ```
 
-Tags: `latest` (most recent release), `v1.2.3` / `1.2.3` (specific version), `main` (rolling edge from main branch).
+Tags: `latest` (most recent release), `v1.2.3` / `1.2.3` (specific version).
 
 ### Configuration
 

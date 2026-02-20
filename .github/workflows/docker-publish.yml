@@ -2,15 +2,34 @@ name: Docker Hub Publish
 
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
 
 env:
   IMAGE_NAME: pubkraal/kraalzibar-server
 
 jobs:
+  ci-check:
+    name: Verify CI Passed
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Check CI status on tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for workflow in "rust.yml" "integration.yml"; do
+            COUNT=$(gh api "repos/${{ github.repository }}/actions/workflows/$workflow/runs?head_sha=${{ github.sha }}&status=success" --jq '.total_count')
+            if [ "$COUNT" -eq 0 ]; then
+              echo "::error::Workflow $workflow has not passed for commit ${{ github.sha }}. Push to main first."
+              exit 1
+            fi
+            echo "Workflow $workflow passed for ${{ github.sha }}"
+          done
+
   build-and-push:
     name: Build and Push Docker Image
+    needs: ci-check
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -34,14 +53,13 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern=v{{version}}
-            type=ref,event=branch
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |

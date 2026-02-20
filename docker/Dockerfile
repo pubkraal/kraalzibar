@@ -14,10 +14,10 @@ FROM debian:bookworm-slim
 
 ARG VERSION=dev
 
-LABEL org.opencontainers.image.source="https://github.com/pubkraal/kraalzibar"
-LABEL org.opencontainers.image.version="${VERSION}"
-LABEL org.opencontainers.image.description="Zanzibar-inspired ReBAC authorization server"
-LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.source="https://github.com/pubkraal/kraalzibar" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="Zanzibar-inspired ReBAC authorization server" \
+      org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
