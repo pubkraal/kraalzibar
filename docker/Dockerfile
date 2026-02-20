@@ -29,7 +29,7 @@ USER kraalzibar
 
 EXPOSE 50051 8080
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
   CMD curl -sf http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["kraalzibar-server"]
