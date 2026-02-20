@@ -1,9 +1,8 @@
 name: Docker Hub Publish
 
 on:
-  workflow_run:
-    workflows: ["Smoke Test"]
-    types: [completed]
+  push:
+    tags: ["v*.*.*"]
 
 env:
   IMAGE_NAME: pubkraal/kraalzibar-server
@@ -11,17 +10,35 @@ env:
 jobs:
   build-and-push:
     name: Build and Push Docker Image
-    # Only publish for successful tag-triggered runs (head_branch is the tag name)
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
+      checks: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Wait for Rust CI
+        uses: lewagon/wait-on-check-action@74049309dfeff245fe8009a0137eacf28136cb3c # v1.5.0
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
+          check-name: Check, Test, Lint
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          running-workflow-name: Docker Hub Publish
+          wait-interval: 30
+          allowed-conclusions: success
+          fail-on-no-checks: false
+
+      - name: Wait for Smoke Test
+        uses: lewagon/wait-on-check-action@74049309dfeff245fe8009a0137eacf28136cb3c # v1.5.0
+        with:
+          ref: ${{ github.sha }}
+          check-name: Docker Build & Health Check
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          running-workflow-name: Docker Hub Publish
+          wait-interval: 30
+          allowed-conclusions: success
+          fail-on-no-checks: false
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -38,8 +55,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}},value=${{ github.event.workflow_run.head_branch }}
-            type=semver,pattern=v{{version}},value=${{ github.event.workflow_run.head_branch }}
+            type=semver,pattern={{version}}
+            type=semver,pattern=v{{version}}
             type=raw,value=latest
 
       - name: Build and push
