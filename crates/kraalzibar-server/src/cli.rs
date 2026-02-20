@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "kraalzibar-server", version)]
 pub struct Cli {
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -90,6 +90,18 @@ mod tests {
             cli.command,
             Some(Command::CreateApiKey { tenant_name }) if tenant_name == "acme"
         ));
+    }
+
+    #[test]
+    fn cli_config_flag_works_after_subcommand() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "serve",
+            "--config",
+            "/etc/kraalzibar.toml",
+        ]);
+        assert_eq!(cli.config, Some(PathBuf::from("/etc/kraalzibar.toml")));
+        assert!(matches!(cli.command, Some(Command::Serve)));
     }
 
     #[test]
