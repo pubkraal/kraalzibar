@@ -2,7 +2,7 @@ use sqlx::PgPool;
 
 use crate::traits::StorageError;
 
-fn validate_schema_name(name: &str) -> Result<(), StorageError> {
+pub fn validate_schema_name(name: &str) -> Result<(), StorageError> {
     let is_valid = name.starts_with("tenant_")
         && name.len() == 39
         && name[7..].chars().all(|c| c.is_ascii_hexdigit());

@@ -171,6 +171,8 @@ async fn run_purge_relationships(
         }
     };
 
+    kraalzibar_storage::postgres::migrations::validate_schema_name(&pg_schema)?;
+
     let count = count_active_relationships(&pool, &pg_schema).await?;
 
     if !yes {
@@ -210,7 +212,8 @@ async fn count_active_relationships(
     pg_schema: &str,
 ) -> Result<i64, sqlx::Error> {
     let query = format!(
-        "SELECT COUNT(*) FROM {pg_schema}.relation_tuples WHERE deleted_tx_id = 9223372036854775807"
+        "SELECT COUNT(*) FROM {pg_schema}.relation_tuples WHERE deleted_tx_id = {}",
+        i64::MAX
     );
     let (count,): (i64,) = sqlx::query_as(&query).fetch_one(pool).await?;
     Ok(count)
