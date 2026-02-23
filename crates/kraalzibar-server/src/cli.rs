@@ -24,6 +24,13 @@ pub enum Command {
         #[arg(long)]
         tenant_name: String,
     },
+    PurgeRelationships {
+        #[arg(long)]
+        tenant_name: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[cfg(test)]
@@ -102,6 +109,35 @@ mod tests {
         ]);
         assert_eq!(cli.config, Some(PathBuf::from("/etc/kraalzibar.toml")));
         assert!(matches!(cli.command, Some(Command::Serve)));
+    }
+
+    #[test]
+    fn cli_parses_purge_relationships() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "purge-relationships",
+            "--tenant-name",
+            "acme",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::PurgeRelationships { tenant_name, yes }) if tenant_name == "acme" && !yes
+        ));
+    }
+
+    #[test]
+    fn cli_parses_purge_relationships_with_yes() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "purge-relationships",
+            "--tenant-name",
+            "acme",
+            "--yes",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::PurgeRelationships { tenant_name, yes }) if tenant_name == "acme" && yes
+        ));
     }
 
     #[test]

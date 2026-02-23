@@ -83,6 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::CreateApiKey { tenant_name }) => {
             run_create_api_key(&config, &tenant_name).await
         }
+        Some(Command::PurgeRelationships { tenant_name, yes }) => {
+            run_purge_relationships(&config, &tenant_name, yes).await
+        }
         Some(Command::Serve) | None => run_serve(config).await,
     }
 }
@@ -148,6 +151,60 @@ async fn run_create_api_key(
     println!("  API Key: {full_key}");
     println!();
     println!("Store this key securely — it will not be shown again.");
+    Ok(())
+}
+
+async fn run_purge_relationships(
+    config: &AppConfig,
+    tenant_name: &str,
+    yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let row = sqlx::query_as::<_, (uuid::Uuid, String)>(
+        "SELECT id, pg_schema FROM tenants WHERE name = $1",
+    )
+    .bind(tenant_name)
+    .fetch_optional(&pool)
+    .await?;
+
+    let (_tenant_uuid, pg_schema) = match row {
+        Some(row) => row,
+        None => {
+            eprintln!("Error: tenant '{tenant_name}' not found");
+            std::process::exit(1);
+        }
+    };
+
+    let count_query = format!(
+        "SELECT COUNT(*) FROM {pg_schema}.relation_tuples WHERE deleted_tx_id = 9223372036854775807"
+    );
+    let (count,): (i64,) = sqlx::query_as(&count_query).fetch_one(&pool).await?;
+
+    if !yes {
+        eprintln!(
+            "WARNING: This will permanently delete all {count} relationship(s) for tenant '{tenant_name}'."
+        );
+        eprintln!("The schema definition will be preserved.");
+        eprintln!();
+        eprintln!("Re-run with --yes to confirm:");
+        eprintln!("  kraalzibar-server purge-relationships --tenant-name {tenant_name} --yes");
+        std::process::exit(1);
+    }
+
+    let delete_query = format!("DELETE FROM {pg_schema}.relation_tuples");
+    let result = sqlx::query(&delete_query).execute(&pool).await?;
+
+    let reset_seq = format!("ALTER SEQUENCE {pg_schema}.tx_id_seq RESTART WITH 1");
+    sqlx::query(&reset_seq).execute(&pool).await?;
+
+    println!(
+        "Purged {} relationship(s) for tenant '{tenant_name}'. Transaction sequence reset.",
+        result.rows_affected()
+    );
+
     Ok(())
 }
 
