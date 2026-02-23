@@ -2,8 +2,6 @@ use kraalzibar_core::tuple::{SnapshotToken, TenantId, Tuple, TupleFilter, TupleW
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StorageError {
-    #[error("duplicate tuple in write batch")]
-    DuplicateTuple,
     #[error("delete filter must have at least one field set")]
     EmptyDeleteFilter,
     #[error("snapshot {requested} is ahead of current {current}")]

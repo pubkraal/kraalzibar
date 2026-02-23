@@ -100,14 +100,6 @@ impl RelationshipStore for InMemoryStore {
             }
         }
 
-        for (i, w) in writes.iter().enumerate() {
-            for other in &writes[i + 1..] {
-                if w == other {
-                    return Err(StorageError::DuplicateTuple);
-                }
-            }
-        }
-
         let to_delete: Vec<usize> = state
             .tuples
             .iter()
@@ -116,17 +108,6 @@ impl RelationshipStore for InMemoryStore {
             .map(|(i, _)| i)
             .collect();
 
-        for w in writes {
-            let active_dup = state
-                .tuples
-                .iter()
-                .enumerate()
-                .any(|(i, t)| t.is_active() && !to_delete.contains(&i) && t.matches_write(w));
-            if active_dup {
-                return Err(StorageError::DuplicateTuple);
-            }
-        }
-
         state.current_tx += 1;
         let tx_id = state.current_tx;
 
@@ -134,7 +115,29 @@ impl RelationshipStore for InMemoryStore {
             state.tuples[i].deleted_tx_id = tx_id;
         }
 
+        let mut seen = std::collections::HashSet::new();
         for w in writes {
+            let key = (
+                &w.object.object_type,
+                &w.object.object_id,
+                &w.relation,
+                &w.subject.subject_type,
+                &w.subject.subject_id,
+                &w.subject.subject_relation,
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+
+            let active_dup = state
+                .tuples
+                .iter()
+                .enumerate()
+                .any(|(i, t)| t.is_active() && !to_delete.contains(&i) && t.matches_write(w));
+            if active_dup {
+                continue;
+            }
+
             state.tuples.push(StoredTuple {
                 object_type: w.object.object_type.clone(),
                 object_id: w.object.object_id.clone(),
@@ -480,15 +483,37 @@ mod tests {
         assert_eq!(results.len(), 1);
     }
 
-    // 10. Duplicate tuple in same write rejected
+    // 10. Duplicate tuple in same write is idempotent (touch semantics)
     #[tokio::test]
-    async fn duplicate_tuple_in_same_write_rejected() {
+    async fn duplicate_tuple_in_same_write_is_idempotent() {
         let store = InMemoryStore::new();
         let w = make_write("doc", "1", "viewer", direct_user("a"));
 
         let result = store.write(&[w.clone(), w], &[]).await;
 
-        assert!(matches!(result, Err(StorageError::DuplicateTuple)));
+        assert!(result.is_ok());
+        let tuples = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(tuples.len(), 1);
+    }
+
+    // 10b. Duplicate of existing tuple is idempotent (touch semantics)
+    #[tokio::test]
+    async fn duplicate_of_existing_tuple_is_idempotent() {
+        let store = InMemoryStore::new();
+        let w = make_write("doc", "1", "viewer", direct_user("a"));
+
+        store.write(&[w.clone()], &[]).await.unwrap();
+        let result = store.write(&[w], &[]).await;
+
+        assert!(result.is_ok());
+        let tuples = store
+            .read(&TupleFilter::default(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(tuples.len(), 1);
     }
 
     // 11. Re-write previously deleted tuple creates new version
@@ -720,9 +745,9 @@ mod tests {
         assert_eq!(schema, Some(definition.to_string()));
     }
 
-    // 21. write_schema overwrites previous
+    // 21. Idempotent write still increments snapshot (new tx even if no-op)
     #[tokio::test]
-    async fn failed_write_does_not_increment_snapshot() {
+    async fn idempotent_write_still_increments_snapshot() {
         let store = InMemoryStore::new();
         store
             .write(&[make_write("doc", "1", "viewer", direct_user("a"))], &[])
@@ -731,17 +756,18 @@ mod tests {
 
         let snap_before = store.snapshot().await.unwrap();
 
-        let result = store
+        store
             .write(&[make_write("doc", "1", "viewer", direct_user("a"))], &[])
-            .await;
-        assert!(result.is_err());
+            .await
+            .unwrap();
 
         let snap_after = store.snapshot().await.unwrap();
-        assert_eq!(snap_before, snap_after);
+        assert!(snap_after > snap_before);
     }
 
+    // Touch existing tuple + delete in same write is idempotent
     #[tokio::test]
-    async fn failed_write_does_not_partially_apply_deletes() {
+    async fn touch_existing_with_delete_in_same_write() {
         let store = InMemoryStore::new();
         store
             .write(
@@ -765,13 +791,14 @@ mod tests {
                 &[delete_filter],
             )
             .await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
 
         let results = store
             .read(&TupleFilter::default(), None, None)
             .await
             .unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].object.object_id, "2");
     }
 
     #[tokio::test]

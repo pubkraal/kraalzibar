@@ -52,6 +52,8 @@ pub async fn insert_tuple<'e>(
         INSERT INTO {schema}.relation_tuples
             (object_type, object_id, relation, subject_type, subject_id, subject_relation, created_tx_id, deleted_tx_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (object_type, object_id, relation, subject_type, subject_id, subject_relation, deleted_tx_id)
+        DO NOTHING
         "#
     );
     sqlx::query(&query)
@@ -65,14 +67,7 @@ pub async fn insert_tuple<'e>(
         .bind(ACTIVE_TX_ID)
         .execute(executor)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref db_err) = e
-                && db_err.is_unique_violation()
-            {
-                return StorageError::DuplicateTuple;
-            }
-            to_storage_error(e)
-        })?;
+        .map_err(to_storage_error)?;
     Ok(())
 }
 
