@@ -83,6 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::CreateApiKey { tenant_name }) => {
             run_create_api_key(&config, &tenant_name).await
         }
+        Some(Command::PurgeRelationships { tenant_name, yes }) => {
+            run_purge_relationships(&config, &tenant_name, yes).await
+        }
         Some(Command::Serve) | None => run_serve(config).await,
     }
 }
@@ -149,6 +152,81 @@ async fn run_create_api_key(
     println!();
     println!("Store this key securely — it will not be shown again.");
     Ok(())
+}
+
+async fn run_purge_relationships(
+    config: &AppConfig,
+    tenant_name: &str,
+    yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let pg_schema = match resolve_tenant_schema(&pool, tenant_name).await? {
+        Some(schema) => schema,
+        None => {
+            eprintln!("Error: tenant '{tenant_name}' not found");
+            std::process::exit(1);
+        }
+    };
+
+    kraalzibar_storage::postgres::migrations::validate_schema_name(&pg_schema)?;
+
+    let count = count_active_relationships(&pool, &pg_schema).await?;
+
+    if !yes {
+        eprintln!(
+            "WARNING: This will permanently delete all {count} relationship(s) for tenant '{tenant_name}'."
+        );
+        eprintln!("The schema definition will be preserved.");
+        eprintln!();
+        eprintln!("Re-run with --yes to confirm:");
+        eprintln!("  kraalzibar-server purge-relationships --tenant-name {tenant_name} --yes");
+        std::process::exit(1);
+    }
+
+    let deleted = purge_relationships(&pool, &pg_schema).await?;
+
+    println!(
+        "Purged {deleted} relationship(s) for tenant '{tenant_name}'. Transaction sequence reset.",
+    );
+
+    Ok(())
+}
+
+async fn resolve_tenant_schema(
+    pool: &sqlx::PgPool,
+    tenant_name: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String,)>("SELECT pg_schema FROM tenants WHERE name = $1")
+        .bind(tenant_name)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|(schema,)| schema))
+}
+
+async fn count_active_relationships(
+    pool: &sqlx::PgPool,
+    pg_schema: &str,
+) -> Result<i64, sqlx::Error> {
+    let query = format!(
+        "SELECT COUNT(*) FROM {pg_schema}.relation_tuples WHERE deleted_tx_id = {}",
+        i64::MAX
+    );
+    let (count,): (i64,) = sqlx::query_as(&query).fetch_one(pool).await?;
+    Ok(count)
+}
+
+async fn purge_relationships(pool: &sqlx::PgPool, pg_schema: &str) -> Result<u64, sqlx::Error> {
+    let delete_query = format!("DELETE FROM {pg_schema}.relation_tuples");
+    let result = sqlx::query(&delete_query).execute(pool).await?;
+
+    let reset_seq = format!("ALTER SEQUENCE {pg_schema}.tx_id_seq RESTART WITH 1");
+    sqlx::query(&reset_seq).execute(pool).await?;
+
+    Ok(result.rows_affected())
 }
 
 async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -315,4 +393,189 @@ async fn shutdown_signal(shutdown_tx: tokio::sync::watch::Sender<()>) {
     }
 
     let _ = shutdown_tx.send(());
+}
+
+#[cfg(test)]
+mod purge_tests {
+    use super::*;
+    use kraalzibar_core::tuple::{ObjectRef, SubjectRef, TupleWrite};
+    use sqlx::PgPool;
+    use std::sync::OnceLock;
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+
+    async fn test_db_url() -> String {
+        static URL: OnceLock<String> = OnceLock::new();
+
+        if let Some(url) = URL.get() {
+            return url.clone();
+        }
+
+        let container = Postgres::default()
+            .with_tag("16-alpine")
+            .start()
+            .await
+            .unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        let url = format!("postgres://postgres:postgres@localhost:{port}/postgres");
+
+        let pool = PgPool::connect(&url).await.unwrap();
+        kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        std::mem::forget(container);
+
+        URL.get_or_init(|| url).clone()
+    }
+
+    async fn test_pool() -> PgPool {
+        let url = test_db_url().await;
+        PgPool::connect(&url).await.unwrap()
+    }
+
+    async fn provision_test_tenant(pool: &PgPool, name: &str) -> (TenantId, String) {
+        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
+        let factory = kraalzibar_storage::postgres::PostgresStoreFactory::new(pool.clone());
+        factory.provision_tenant(&tenant_id, name).await.unwrap();
+
+        let pg_schema = resolve_tenant_schema(pool, name).await.unwrap().unwrap();
+        (tenant_id, pg_schema)
+    }
+
+    async fn write_tuples(pool: &PgPool, tenant_id: &TenantId, writes: &[TupleWrite]) {
+        let factory = kraalzibar_storage::postgres::PostgresStoreFactory::new(pool.clone());
+        let store = factory.for_tenant(tenant_id);
+        store.write(writes, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn purge_deletes_all_tuples_for_target_tenant() {
+        let pool = test_pool().await;
+        let (tenant_id, pg_schema) = provision_test_tenant(&pool, "purge-all").await;
+
+        write_tuples(
+            &pool,
+            &tenant_id,
+            &[
+                TupleWrite::new(
+                    ObjectRef::new("doc", "readme"),
+                    "viewer",
+                    SubjectRef::direct("user", "alice"),
+                ),
+                TupleWrite::new(
+                    ObjectRef::new("doc", "design"),
+                    "editor",
+                    SubjectRef::direct("user", "bob"),
+                ),
+            ],
+        )
+        .await;
+
+        let count_before = count_active_relationships(&pool, &pg_schema).await.unwrap();
+        assert_eq!(count_before, 2);
+
+        let deleted = purge_relationships(&pool, &pg_schema).await.unwrap();
+        assert_eq!(deleted, 2);
+
+        let count_after = count_active_relationships(&pool, &pg_schema).await.unwrap();
+        assert_eq!(count_after, 0);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn purge_resets_tx_sequence() {
+        let pool = test_pool().await;
+        let (tenant_id, pg_schema) = provision_test_tenant(&pool, "purge-seq").await;
+
+        write_tuples(
+            &pool,
+            &tenant_id,
+            &[TupleWrite::new(
+                ObjectRef::new("doc", "readme"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            )],
+        )
+        .await;
+
+        let query = format!("SELECT last_value FROM {pg_schema}.tx_id_seq WHERE is_called = true");
+        let before: Option<(i64,)> = sqlx::query_as(&query).fetch_optional(&pool).await.unwrap();
+        assert!(before.is_some(), "sequence should have been used");
+
+        purge_relationships(&pool, &pg_schema).await.unwrap();
+
+        let next_query = format!("SELECT nextval('{pg_schema}.tx_id_seq')");
+        let (next_val,): (i64,) = sqlx::query_as(&next_query).fetch_one(&pool).await.unwrap();
+        assert_eq!(next_val, 1, "next tx_id should restart from 1");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn purge_does_not_affect_other_tenants() {
+        let pool = test_pool().await;
+        let (tenant_a_id, pg_schema_a) = provision_test_tenant(&pool, "purge-tenant-a").await;
+        let (tenant_b_id, pg_schema_b) = provision_test_tenant(&pool, "purge-tenant-b").await;
+
+        write_tuples(
+            &pool,
+            &tenant_a_id,
+            &[TupleWrite::new(
+                ObjectRef::new("doc", "readme"),
+                "viewer",
+                SubjectRef::direct("user", "alice"),
+            )],
+        )
+        .await;
+
+        write_tuples(
+            &pool,
+            &tenant_b_id,
+            &[TupleWrite::new(
+                ObjectRef::new("doc", "design"),
+                "editor",
+                SubjectRef::direct("user", "bob"),
+            )],
+        )
+        .await;
+
+        purge_relationships(&pool, &pg_schema_a).await.unwrap();
+
+        let count_a = count_active_relationships(&pool, &pg_schema_a)
+            .await
+            .unwrap();
+        assert_eq!(count_a, 0, "tenant A should have 0 tuples");
+
+        let count_b = count_active_relationships(&pool, &pg_schema_b)
+            .await
+            .unwrap();
+        assert_eq!(count_b, 1, "tenant B should still have 1 tuple");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn purge_nonexistent_tenant_returns_none() {
+        let pool = test_pool().await;
+
+        let result = resolve_tenant_schema(&pool, "no-such-tenant")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn purge_tenant_with_no_relationships_succeeds() {
+        let pool = test_pool().await;
+        let (_tenant_id, pg_schema) = provision_test_tenant(&pool, "purge-empty").await;
+
+        let deleted = purge_relationships(&pool, &pg_schema).await.unwrap();
+        assert_eq!(deleted, 0);
+
+        let count = count_active_relationships(&pool, &pg_schema).await.unwrap();
+        assert_eq!(count, 0);
+    }
 }

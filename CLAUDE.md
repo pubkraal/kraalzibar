@@ -274,3 +274,13 @@ configuration instructions as they become available.
   `curl`, and `sh` are not available. Docker healthchecks using these tools
   will always fail. Use `condition: service_started` instead of
   `service_healthy` for dependencies on the collector.
+- **Testcontainers `Postgres::default()` uses PG 11**: The default image
+  tag lacks `gen_random_uuid()` (added in PG 13). Use
+  `.with_tag("16-alpine")` and import `testcontainers::ImageExt`.
+- **`OnceLock<PgPool>` breaks across tokio runtimes**: `PgPool` is bound to
+  the runtime that created it. With `#[tokio::test]` (one runtime per test),
+  store the DB URL in `OnceLock<String>` instead and create a fresh pool per
+  test. Run migrations once in the URL-init block.
+- **Always validate `pg_schema` before SQL interpolation**: Even though
+  values come from the DB, call `validate_schema_name()` before building
+  dynamic SQL to guard against tampered data.
