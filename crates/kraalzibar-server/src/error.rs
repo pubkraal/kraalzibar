@@ -48,12 +48,12 @@ mod tests {
 
     #[test]
     fn api_error_from_storage_error() {
-        let storage_err = StorageError::DuplicateTuple;
+        let storage_err = StorageError::EmptyDeleteFilter;
         let api_err: ApiError = storage_err.into();
 
         assert!(
-            api_err.to_string().contains("duplicate"),
-            "expected 'duplicate' in error message, got: {api_err}"
+            api_err.to_string().contains("delete filter"),
+            "expected 'delete filter' in error message, got: {api_err}"
         );
     }
 

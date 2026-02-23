@@ -32,9 +32,6 @@ fn api_error_to_status(err: crate::error::ApiError) -> Status {
         ApiError::Check(CheckError::MaxDepthExceeded(_)) => {
             Status::resource_exhausted(err.to_string())
         }
-        ApiError::Storage(kraalzibar_storage::StorageError::DuplicateTuple) => {
-            Status::already_exists(err.to_string())
-        }
         ApiError::Storage(kraalzibar_storage::StorageError::EmptyDeleteFilter)
         | ApiError::Storage(kraalzibar_storage::StorageError::SnapshotAhead { .. }) => {
             Status::invalid_argument(err.to_string())
@@ -55,19 +52,6 @@ mod tests {
     use super::*;
     use crate::error::ApiError;
     use kraalzibar_storage::StorageError;
-
-    #[test]
-    fn duplicate_tuple_maps_to_already_exists() {
-        let err = ApiError::Storage(StorageError::DuplicateTuple);
-        let status = api_error_to_status(err);
-
-        assert_eq!(status.code(), tonic::Code::AlreadyExists);
-        assert!(
-            status.message().contains("duplicate"),
-            "expected 'duplicate' in message, got: {}",
-            status.message()
-        );
-    }
 
     #[test]
     fn empty_delete_filter_maps_to_invalid_argument() {

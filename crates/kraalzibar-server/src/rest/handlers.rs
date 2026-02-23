@@ -95,9 +95,6 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         ApiError::BreakingChanges(_) => {
             error_response(StatusCode::PRECONDITION_FAILED, &err.to_string())
         }
-        ApiError::Storage(kraalzibar_storage::StorageError::DuplicateTuple) => {
-            error_response(StatusCode::CONFLICT, &err.to_string())
-        }
         ApiError::Storage(kraalzibar_storage::StorageError::EmptyDeleteFilter)
         | ApiError::Storage(kraalzibar_storage::StorageError::SnapshotAhead { .. }) => {
             error_response(StatusCode::BAD_REQUEST, &err.to_string())
@@ -964,19 +961,6 @@ mod tests {
         assert!(
             body.get("read_at").is_none(),
             "read_relationships without consistency should omit read_at: {body}"
-        );
-    }
-
-    #[test]
-    fn duplicate_tuple_returns_409() {
-        let err = ApiError::Storage(kraalzibar_storage::StorageError::DuplicateTuple);
-        let (status, body) = api_error_to_response(err);
-
-        assert_eq!(status, StatusCode::CONFLICT);
-        let msg = body.0["error"].as_str().unwrap();
-        assert!(
-            msg.contains("duplicate"),
-            "expected 'duplicate' in message, got: {msg}"
         );
     }
 
