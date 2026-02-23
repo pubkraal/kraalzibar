@@ -70,6 +70,9 @@ kraalzibar-server provision-tenant --name acme --config config.toml
 
 # Create an API key for a tenant
 kraalzibar-server create-api-key --tenant-name acme --config config.toml
+
+# Purge all relationships for a tenant (requires --yes to confirm)
+kraalzibar-server purge-relationships --tenant-name acme --yes --config config.toml
 ```
 
 ### Test
@@ -454,7 +457,20 @@ is hashed with Argon2 before storage.
 kraalzibar-server serve --config config.toml
 ```
 
-**6. Use the API key** in requests via the `Authorization` header:
+**6. Purge relationships** (optional) — delete all relationships for a tenant
+and reset the transaction sequence. The schema definition is preserved:
+
+```bash
+# Dry run — shows how many relationships would be deleted
+kraalzibar-server purge-relationships --tenant-name acme --config config.toml
+
+# Execute the purge
+kraalzibar-server purge-relationships --tenant-name acme --yes --config config.toml
+# Output:
+#   Purged 42 relationship(s) for tenant 'acme'. Transaction sequence reset.
+```
+
+**7. Use the API key** in requests via the `Authorization` header:
 
 ```bash
 curl -X POST http://localhost:8080/v1/permissions/check \
