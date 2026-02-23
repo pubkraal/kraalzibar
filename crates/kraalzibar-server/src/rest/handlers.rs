@@ -95,7 +95,15 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         ApiError::BreakingChanges(_) => {
             error_response(StatusCode::PRECONDITION_FAILED, &err.to_string())
         }
-        ApiError::Check(CheckError::StorageError(_)) | ApiError::Storage(_) => {
+        ApiError::Storage(kraalzibar_storage::StorageError::DuplicateTuple) => {
+            error_response(StatusCode::CONFLICT, &err.to_string())
+        }
+        ApiError::Storage(kraalzibar_storage::StorageError::EmptyDeleteFilter)
+        | ApiError::Storage(kraalzibar_storage::StorageError::SnapshotAhead { .. }) => {
+            error_response(StatusCode::BAD_REQUEST, &err.to_string())
+        }
+        ApiError::Check(CheckError::StorageError(_))
+        | ApiError::Storage(kraalzibar_storage::StorageError::Internal(_)) => {
             tracing::error!(error = %err, "internal storage error");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
         }
@@ -495,6 +503,8 @@ pub async fn healthz() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::super::{AppState, create_router};
+    use super::{StatusCode, api_error_to_response};
+    use crate::error::ApiError;
     use crate::middleware::AuthState;
     use crate::service::AuthzService;
     use axum_test::TestServer;
@@ -954,6 +964,64 @@ mod tests {
         assert!(
             body.get("read_at").is_none(),
             "read_relationships without consistency should omit read_at: {body}"
+        );
+    }
+
+    #[test]
+    fn duplicate_tuple_returns_409() {
+        let err = ApiError::Storage(kraalzibar_storage::StorageError::DuplicateTuple);
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        let msg = body.0["error"].as_str().unwrap();
+        assert!(
+            msg.contains("duplicate"),
+            "expected 'duplicate' in message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn empty_delete_filter_returns_400() {
+        let err = ApiError::Storage(kraalzibar_storage::StorageError::EmptyDeleteFilter);
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let msg = body.0["error"].as_str().unwrap();
+        assert!(
+            msg.contains("delete filter"),
+            "expected 'delete filter' in message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn snapshot_ahead_returns_400() {
+        let err = ApiError::Storage(kraalzibar_storage::StorageError::SnapshotAhead {
+            requested: 10,
+            current: 5,
+        });
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let msg = body.0["error"].as_str().unwrap();
+        assert!(
+            msg.contains("ahead"),
+            "expected 'ahead' in message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn internal_storage_error_returns_500_with_generic_message() {
+        let err = ApiError::Storage(kraalzibar_storage::StorageError::Internal(
+            "db connection lost".to_string(),
+        ));
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let msg = body.0["error"].as_str().unwrap();
+        assert_eq!(msg, "internal server error");
+        assert!(
+            !msg.contains("db connection"),
+            "internal details must not leak to client"
         );
     }
 
