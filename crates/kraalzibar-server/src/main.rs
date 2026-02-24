@@ -16,8 +16,10 @@ use kraalzibar_server::proto::kraalzibar::v1::{
 };
 use kraalzibar_server::rest;
 use kraalzibar_server::service::AuthzService;
+use kraalzibar_server::tls::{TlsConfigOptions, build_tls_server_config};
 use kraalzibar_storage::InMemoryStoreFactory;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
+use tokio_stream::StreamExt;
 
 use kraalzibar_core::tuple::TenantId;
 use tracing_subscriber::EnvFilter;
@@ -339,34 +341,104 @@ where
         axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
     );
 
-    tracing::info!(%grpc_addr, "gRPC server listening");
-    tracing::info!(%rest_addr, "REST server listening");
+    let grpc_router = tonic::transport::Server::builder()
+        .add_service(health_service)
+        .add_service(permission_svc)
+        .add_service(relationship_svc)
+        .add_service(schema_svc);
 
     let (shutdown_tx, _) = tokio::sync::watch::channel(());
     let shutdown_rx_rest = shutdown_tx.subscribe();
 
-    let grpc_server = tonic::transport::Server::builder()
-        .add_service(health_service)
-        .add_service(permission_svc)
-        .add_service(relationship_svc)
-        .add_service(schema_svc)
-        .serve_with_shutdown(grpc_addr, shutdown_signal(shutdown_tx));
+    if config.tls.is_enabled() {
+        tracing::info!(%grpc_addr, "gRPC server listening (TLS 1.3)");
+        tracing::info!(%rest_addr, "REST server listening (TLS 1.3)");
 
-    let rest_listener = tokio::net::TcpListener::bind(rest_addr).await?;
-    let rest_server = axum::serve(rest_listener, rest_router).with_graceful_shutdown(async move {
-        let mut rx = shutdown_rx_rest;
-        let _ = rx.changed().await;
-    });
+        let grpc_tls = build_tls_server_config(TlsConfigOptions {
+            cert_path: &config.tls.cert_path,
+            key_path: &config.tls.key_path,
+            alpn_protocols: vec![b"h2".to_vec()],
+        })?;
+        let rest_tls = build_tls_server_config(TlsConfigOptions {
+            cert_path: &config.tls.cert_path,
+            key_path: &config.tls.key_path,
+            alpn_protocols: vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        })?;
 
-    tokio::select! {
-        result = grpc_server => {
-            if let Err(e) = result {
-                tracing::error!(error = %e, "gRPC server error");
+        let tls_acceptor = tokio_rustls::TlsAcceptor::from(grpc_tls);
+        let tcp_listener = tokio::net::TcpListener::bind(grpc_addr).await?;
+        let tcp_stream = tokio_stream::wrappers::TcpListenerStream::new(tcp_listener);
+        let incoming = tcp_stream
+            .then(move |conn| {
+                let acceptor = tls_acceptor.clone();
+                async move {
+                    match conn {
+                        Ok(tcp) => match acceptor.accept(tcp).await {
+                            Ok(tls_stream) => Some(Ok::<_, std::io::Error>(tls_stream)),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "gRPC TLS handshake failed");
+                                None
+                            }
+                        },
+                        Err(e) => {
+                            tracing::error!(error = %e, "gRPC TCP accept failed");
+                            None
+                        }
+                    }
+                }
+            })
+            .filter_map(|x| x);
+
+        let grpc_server =
+            grpc_router.serve_with_incoming_shutdown(incoming, shutdown_signal(shutdown_tx));
+
+        let rest_tls_config = axum_server::tls_rustls::RustlsConfig::from_config(rest_tls);
+        let handle = axum_server::Handle::new();
+        let rest_handle = handle.clone();
+        tokio::spawn(async move {
+            let mut rx = shutdown_rx_rest;
+            let _ = rx.changed().await;
+            rest_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+        });
+        let rest_server = axum_server::bind_rustls(rest_addr, rest_tls_config)
+            .handle(handle)
+            .serve(rest_router.into_make_service());
+
+        tokio::select! {
+            result = grpc_server => {
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "gRPC server error");
+                }
+            }
+            result = rest_server => {
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "REST server error");
+                }
             }
         }
-        result = rest_server => {
-            if let Err(e) = result {
-                tracing::error!(error = %e, "REST server error");
+    } else {
+        tracing::info!(%grpc_addr, "gRPC server listening");
+        tracing::info!(%rest_addr, "REST server listening");
+
+        let grpc_server = grpc_router.serve_with_shutdown(grpc_addr, shutdown_signal(shutdown_tx));
+
+        let rest_listener = tokio::net::TcpListener::bind(rest_addr).await?;
+        let rest_server =
+            axum::serve(rest_listener, rest_router).with_graceful_shutdown(async move {
+                let mut rx = shutdown_rx_rest;
+                let _ = rx.changed().await;
+            });
+
+        tokio::select! {
+            result = grpc_server => {
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "gRPC server error");
+                }
+            }
+            result = rest_server => {
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "REST server error");
+                }
             }
         }
     }

@@ -12,6 +12,20 @@ pub struct AppConfig {
     pub log: LogConfig,
     pub cache: CacheConfig,
     pub tracing: TracingConfig,
+    pub tls: TlsConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TlsConfig {
+    pub cert_path: String,
+    pub key_path: String,
+}
+
+impl TlsConfig {
+    pub fn is_enabled(&self) -> bool {
+        !self.cert_path.is_empty() && !self.key_path.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -311,6 +325,12 @@ impl AppConfig {
         {
             self.tracing.sample_rate = rate;
         }
+        if let Some(v) = env("KRAALZIBAR_TLS_CERT_PATH") {
+            self.tls.cert_path = v;
+        }
+        if let Some(v) = env("KRAALZIBAR_TLS_KEY_PATH") {
+            self.tls.key_path = v;
+        }
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -404,6 +424,13 @@ impl AppConfig {
         if self.tracing.enabled && self.tracing.otlp_endpoint.is_empty() {
             return Err(ConfigError::Validation(
                 "tracing.otlp_endpoint must not be empty when tracing is enabled".to_string(),
+            ));
+        }
+        let has_cert = !self.tls.cert_path.is_empty();
+        let has_key = !self.tls.key_path.is_empty();
+        if has_cert != has_key {
+            return Err(ConfigError::Validation(
+                "tls.cert_path and tls.key_path must both be set or both be empty".to_string(),
             ));
         }
         Ok(())
@@ -840,5 +867,81 @@ sample_rate = 0.5
         let config = AppConfig::default();
         assert!(!config.tracing.enabled);
         assert_eq!(config.tracing.service_name, "kraalzibar");
+    }
+
+    // --- TLS Config Tests ---
+
+    #[test]
+    fn tls_config_defaults_to_disabled() {
+        let config = TlsConfig::default();
+
+        assert!(!config.is_enabled());
+        assert!(config.cert_path.is_empty());
+        assert!(config.key_path.is_empty());
+    }
+
+    #[test]
+    fn tls_config_enabled_when_both_paths_set() {
+        let config = TlsConfig {
+            cert_path: "/path/to/cert.pem".to_string(),
+            key_path: "/path/to/key.pem".to_string(),
+        };
+
+        assert!(config.is_enabled());
+    }
+
+    #[test]
+    fn tls_config_from_toml() {
+        let toml_str = r#"
+[tls]
+cert_path = "/etc/kraalzibar/tls/server.crt"
+key_path = "/etc/kraalzibar/tls/server.key"
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+
+        assert!(config.tls.is_enabled());
+        assert_eq!(config.tls.cert_path, "/etc/kraalzibar/tls/server.crt");
+        assert_eq!(config.tls.key_path, "/etc/kraalzibar/tls/server.key");
+    }
+
+    #[test]
+    fn tls_config_env_overrides() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_TLS_CERT_PATH" => Some("/env/cert.pem".to_string()),
+                "KRAALZIBAR_TLS_KEY_PATH" => Some("/env/key.pem".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert!(config.tls.is_enabled());
+        assert_eq!(config.tls.cert_path, "/env/cert.pem");
+        assert_eq!(config.tls.key_path, "/env/key.pem");
+    }
+
+    #[test]
+    fn tls_config_rejects_partial_cert_only() {
+        let mut config = AppConfig::default();
+        config.tls.cert_path = "/path/to/cert.pem".to_string();
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("tls")),
+            "expected validation error for partial TLS config: {result:?}"
+        );
+    }
+
+    #[test]
+    fn tls_config_rejects_partial_key_only() {
+        let mut config = AppConfig::default();
+        config.tls.key_path = "/path/to/key.pem".to_string();
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("tls")),
+            "expected validation error for partial TLS config: {result:?}"
+        );
     }
 }

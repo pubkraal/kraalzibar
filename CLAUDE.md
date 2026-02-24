@@ -284,3 +284,26 @@ configuration instructions as they become available.
 - **Always validate `pg_schema` before SQL interpolation**: Even though
   values come from the DB, call `validate_schema_name()` before building
   dynamic SQL to guard against tampered data.
+- **rustls 0.23 `CryptoProvider` must be explicit**: Using
+  `builder_with_protocol_versions` panics at runtime if no provider is
+  installed. Use `builder_with_provider(ring::default_provider().into())`
+  to explicitly select ring. In integration tests, call
+  `rustls::crypto::ring::default_provider().install_default()` (returns
+  `Result` — ignore the `Err` on second call).
+- **tonic `tls` feature required for `Connected` on TlsStream**: Without
+  `features = ["tls"]` on tonic, `serve_with_incoming` rejects
+  `tokio_rustls::server::TlsStream` because `Connected` isn't implemented.
+- **`tokio_stream::StreamExt::filter_map` is sync**: Use `.then()` for
+  async TLS handshake, then `.filter_map(|x| x)` to drop `None`s. The
+  tonic `serve_with_incoming_shutdown` needs a `Stream<Item = Result<IO>>`.
+- **axum-server `RustlsConfig::from_config`** takes `Arc<ServerConfig>`
+  (our `build_tls_server_config` already returns `Arc`). Use
+  `axum_server::Handle` for graceful shutdown — spawn a task that waits on
+  the shutdown channel then calls `handle.graceful_shutdown()`.
+- **reqwest `rustls-tls` feature uses system native TLS on macOS**: Use
+  `default-features = false, features = ["rustls-tls-manual-roots"]` in
+  dev-deps to force rustls and avoid "bad protocol version" errors when
+  the server enforces TLS 1.3 only.
+- **rcgen 0.13 API change**: `CertificateParams::self_signed(&key_pair)`
+  returns `Certificate` without a `key_pair` field. The `KeyPair` must be
+  kept separately for `serialize_pem()`.
