@@ -18,6 +18,7 @@ authorization schema and data space.
 - **Caching** — schema cache (TTL) and check cache (snapshot-keyed) with moka
 - **Prometheus metrics** — request counters, latency histograms, cache hit/miss rates at `/metrics`
 - **Audit logging** — structured events for schema writes, relationship writes, and authentication via `tracing`
+- **TLS 1.3** — opt-in TLS for both gRPC and REST APIs, enforcing TLS 1.3 only
 - **OpenTelemetry tracing** — optional OTLP export with per-request spans (feature-gated)
 - **Client SDKs** — Rust (gRPC), Go (gRPC), TypeScript (REST)
 
@@ -169,9 +170,86 @@ otlp_endpoint = "http://localhost:4317"
 service_name = "kraalzibar"
 sample_rate = 1.0
 
+[tls]
+cert_path = "/etc/kraalzibar/tls/server.crt"
+key_path = "/etc/kraalzibar/tls/server.key"
+
 [log]
 level = "info"
 format = "pretty"  # or "json"
+```
+
+### TLS Configuration
+
+TLS is opt-in. When `cert_path` and `key_path` are both configured, the server
+enforces **TLS 1.3 only** on both gRPC and REST endpoints. When omitted, servers
+run on plain TCP (suitable for dev mode or when behind a TLS-terminating proxy).
+
+**TOML config:**
+
+```toml
+[tls]
+cert_path = "/etc/kraalzibar/tls/server.crt"
+key_path = "/etc/kraalzibar/tls/server.key"
+```
+
+**Environment variables:**
+
+```bash
+KRAALZIBAR_TLS_CERT_PATH="/etc/kraalzibar/tls/server.crt"
+KRAALZIBAR_TLS_KEY_PATH="/etc/kraalzibar/tls/server.key"
+```
+
+Both `cert_path` and `key_path` must be set together — partial configuration is
+rejected at startup.
+
+**Generate a self-signed certificate** for local testing:
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -keyout server.key -out server.crt -days 365 -nodes \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+```
+
+**Start the server with TLS:**
+
+```bash
+KRAALZIBAR_TLS_CERT_PATH=server.crt KRAALZIBAR_TLS_KEY_PATH=server.key cargo run --release
+```
+
+**Verify TLS 1.3:**
+
+```bash
+# Should succeed (TLS 1.3)
+curl --cacert server.crt https://localhost:8080/healthz
+
+# Should fail (TLS 1.2 rejected)
+curl --tls-max 1.2 --cacert server.crt https://localhost:8080/healthz
+```
+
+**SDK TLS connections:**
+
+TypeScript (REST over HTTPS):
+```typescript
+const client = new KraalzibarClient({ baseUrl: "https://localhost:8080" });
+```
+
+Go (gRPC with custom CA):
+```go
+creds := credentials.NewTLS(&tls.Config{RootCAs: caCertPool})
+client, _ := kraalzibar.NewClient("localhost:50051", kraalzibar.WithTransportCredentials(creds))
+```
+
+Rust (gRPC with custom CA):
+```rust
+let tls = tonic::transport::ClientTlsConfig::new()
+    .ca_certificate(tonic::transport::Certificate::from_pem(ca_pem));
+let channel = tonic::transport::Channel::from_static("https://localhost:50051")
+    .tls_config(tls)?
+    .connect()
+    .await?;
+let client = KraalzibarClient::from_channel(channel);
 ```
 
 ## Project Structure
