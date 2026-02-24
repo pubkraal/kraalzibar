@@ -13,3 +13,4 @@ pub mod proto;
 pub mod rest;
 pub mod service;
 pub mod telemetry;
+pub mod tls;

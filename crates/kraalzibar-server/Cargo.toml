@@ -23,7 +23,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.8"
-tonic = "0.12"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+tonic = { version = "0.12", features = ["tls"] }
 tonic-health = "0.12"
 opentelemetry = { version = "0.24", optional = true }
 opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"], optional = true }
@@ -39,10 +43,11 @@ telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-ot
 
 [dev-dependencies]
 axum-test = "16"
+rcgen = "0.13"
 tempfile = "3"
 testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }
-tonic = { version = "0.12", features = ["transport"] }
+tonic = { version = "0.12", features = ["transport", "tls"] }
 
 [build-dependencies]
 tonic-build = "0.12"
