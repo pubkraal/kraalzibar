@@ -6,9 +6,7 @@ use axum::response::IntoResponse;
 use serde::Serialize;
 
 use kraalzibar_core::engine::ExpandTree;
-use kraalzibar_core::tuple::{
-    ObjectRef, SnapshotToken, SubjectRef, TenantId, TupleFilter, TupleWrite,
-};
+use kraalzibar_core::tuple::{ObjectRef, SubjectRef, TenantId, TupleFilter, TupleWrite};
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::error::ApiError;
@@ -63,16 +61,16 @@ fn resolve_consistency(c: Option<&ConsistencyRequest>) -> Result<Consistency, Ap
     match c {
         Some(ConsistencyRequest::Full) => Ok(Consistency::FullConsistency),
         Some(ConsistencyRequest::AtLeastAsFresh { token }) => {
-            let val: u64 = token.parse().map_err(|_| {
+            let snap = crate::token::decode_snapshot(token).map_err(|_| {
                 error_response(StatusCode::BAD_REQUEST, "invalid snapshot token format")
             })?;
-            Ok(Consistency::AtLeastAsFresh(SnapshotToken::new(val)))
+            Ok(Consistency::AtLeastAsFresh(snap))
         }
         Some(ConsistencyRequest::AtExactSnapshot { token }) => {
-            let val: u64 = token.parse().map_err(|_| {
+            let snap = crate::token::decode_snapshot(token).map_err(|_| {
                 error_response(StatusCode::BAD_REQUEST, "invalid snapshot token format")
             })?;
-            Ok(Consistency::AtExactSnapshot(SnapshotToken::new(val)))
+            Ok(Consistency::AtExactSnapshot(snap))
         }
         _ => Ok(Consistency::MinimizeLatency),
     }
@@ -104,6 +102,7 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
             tracing::error!(error = %err, "internal storage error");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
         }
+        ApiError::InvalidToken => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
 }
 
@@ -139,7 +138,7 @@ where
 
     match state.service.check_permission(&tenant_id, input).await {
         Ok(result) => {
-            let checked_at = result.snapshot.map(|s| s.value().to_string());
+            let checked_at = result.snapshot.map(crate::token::encode_snapshot);
             json_response(
                 StatusCode::OK,
                 &CheckPermissionResponse {
@@ -189,7 +188,7 @@ where
                 StatusCode::OK,
                 &ExpandPermissionResponse {
                     tree: tree_json,
-                    expanded_at: output.snapshot.map(|s| s.to_string()),
+                    expanded_at: output.snapshot.map(crate::token::encode_snapshot),
                 },
             )
         }
@@ -265,7 +264,7 @@ where
             StatusCode::OK,
             &LookupResourcesResponse {
                 resource_ids: output.resource_ids,
-                looked_up_at: output.snapshot.map(|s| s.to_string()),
+                looked_up_at: output.snapshot.map(crate::token::encode_snapshot),
             },
         ),
         Err(e) => api_error_to_response(e),
@@ -315,7 +314,7 @@ where
                 StatusCode::OK,
                 &LookupSubjectsResponse {
                     subjects,
-                    looked_up_at: output.snapshot.map(|s| s.to_string()),
+                    looked_up_at: output.snapshot.map(crate::token::encode_snapshot),
                 },
             )
         }
@@ -385,7 +384,7 @@ where
         Ok(token) => json_response(
             StatusCode::OK,
             &WriteRelationshipsResponse {
-                written_at: token.value().to_string(),
+                written_at: crate::token::encode_snapshot(token),
             },
         ),
         Err(e) => api_error_to_response(e),
@@ -442,7 +441,7 @@ where
                 StatusCode::OK,
                 &ReadRelationshipsResponse {
                     relationships,
-                    read_at: output.snapshot.map(|s| s.value().to_string()),
+                    read_at: output.snapshot.map(crate::token::encode_snapshot),
                 },
             )
         }

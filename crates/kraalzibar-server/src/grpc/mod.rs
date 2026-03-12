@@ -44,6 +44,7 @@ fn api_error_to_status(err: crate::error::ApiError) -> Status {
         ApiError::Parse(_) | ApiError::Validation(_) => Status::invalid_argument(err.to_string()),
         ApiError::BreakingChanges(_) => Status::failed_precondition(err.to_string()),
         ApiError::SchemaNotFound => Status::not_found(err.to_string()),
+        ApiError::InvalidToken => Status::invalid_argument(err.to_string()),
     }
 }
 
