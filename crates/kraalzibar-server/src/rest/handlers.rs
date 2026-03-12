@@ -528,7 +528,9 @@ mod tests {
             service,
             metrics: Arc::clone(&metrics),
         };
-        let app = create_router(state, AuthState::dev_mode());
+        let rate_limit =
+            crate::rate_limit::RateLimitState::new(&crate::config::RateLimitConfig::default());
+        let app = create_router(state, AuthState::dev_mode(), rate_limit);
         (TestServer::new(app).unwrap(), metrics)
     }
 

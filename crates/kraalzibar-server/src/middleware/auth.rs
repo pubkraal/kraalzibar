@@ -8,11 +8,13 @@ use kraalzibar_core::tuple::TenantId;
 
 use crate::api_key_repository::ApiKeyRepository;
 use crate::auth;
+use crate::rate_limit::RateLimitState;
 
 #[derive(Clone)]
 pub struct AuthState {
     repository: Option<Arc<ApiKeyRepository>>,
     dev_tenant: TenantId,
+    rate_limit: Option<RateLimitState>,
 }
 
 impl AuthState {
@@ -20,6 +22,7 @@ impl AuthState {
         Self {
             repository: None,
             dev_tenant: TenantId::new(uuid::Uuid::nil()),
+            rate_limit: None,
         }
     }
 
@@ -27,11 +30,21 @@ impl AuthState {
         Self {
             repository: Some(repository),
             dev_tenant: TenantId::new(uuid::Uuid::nil()),
+            rate_limit: None,
         }
+    }
+
+    pub fn with_rate_limit(mut self, rate_limit: RateLimitState) -> Self {
+        self.rate_limit = Some(rate_limit);
+        self
     }
 
     fn is_dev_mode(&self) -> bool {
         self.repository.is_none()
+    }
+
+    pub fn rate_limit_state(&self) -> Option<&RateLimitState> {
+        self.rate_limit.as_ref()
     }
 }
 
@@ -54,6 +67,7 @@ pub async fn rest_auth_middleware(
         request
             .extensions_mut()
             .insert(auth_state.dev_tenant.clone());
+
         return next.run(request).await;
     }
 
@@ -84,23 +98,47 @@ pub async fn rest_auth_middleware(
         }
     };
 
+    if let Some(rl) = &auth_state.rate_limit
+        && rl.auth_failure_limiter.is_blocked(key_id)
+    {
+        return error_json(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed authentication attempts",
+        );
+    }
+
     let lookup_result = match repo.lookup_by_key_id(key_id).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "api key lookup failed");
+
             return error_json(StatusCode::INTERNAL_SERVER_ERROR, "internal server error");
         }
     };
 
     match auth::authenticate(raw_key, |_| lookup_result) {
         Ok(ctx) => {
+            if let Some(rl) = &auth_state.rate_limit {
+                rl.auth_failure_limiter.record_success(key_id);
+            }
+
             request.extensions_mut().insert(ctx.tenant_id);
             next.run(request).await
         }
         Err(auth::AuthError::RevokedKey) => {
+            if let Some(rl) = &auth_state.rate_limit {
+                rl.auth_failure_limiter.record_failure(key_id);
+            }
+
             error_json(StatusCode::UNAUTHORIZED, "api key has been revoked")
         }
-        Err(_) => error_json(StatusCode::UNAUTHORIZED, "invalid api key"),
+        Err(_) => {
+            if let Some(rl) = &auth_state.rate_limit {
+                rl.auth_failure_limiter.record_failure(key_id);
+            }
+
+            error_json(StatusCode::UNAUTHORIZED, "invalid api key")
+        }
     }
 }
 
@@ -113,6 +151,7 @@ pub fn grpc_auth_interceptor(
         request
             .extensions_mut()
             .insert(auth_state.dev_tenant.clone());
+
         return Ok(request);
     }
 
@@ -128,6 +167,14 @@ pub fn grpc_auth_interceptor(
 
     let (key_id, _) = auth::parse_api_key(raw_key)
         .map_err(|_| tonic::Status::unauthenticated("invalid api key format"))?;
+
+    if let Some(rl) = &auth_state.rate_limit
+        && rl.auth_failure_limiter.is_blocked(key_id)
+    {
+        return Err(tonic::Status::resource_exhausted(
+            "too many failed authentication attempts",
+        ));
+    }
 
     let repo = auth_state.repository.as_ref().unwrap();
 
@@ -145,13 +192,27 @@ pub fn grpc_auth_interceptor(
 
     match auth::authenticate(&raw_key, |_| lookup_result) {
         Ok(ctx) => {
+            if let Some(rl) = &auth_state.rate_limit {
+                rl.auth_failure_limiter.record_success(key_id);
+            }
+
             request.extensions_mut().insert(ctx.tenant_id);
             Ok(request)
         }
         Err(auth::AuthError::RevokedKey) => {
+            if let Some(rl) = &auth_state.rate_limit {
+                rl.auth_failure_limiter.record_failure(key_id);
+            }
+
             Err(tonic::Status::unauthenticated("api key has been revoked"))
         }
-        Err(_) => Err(tonic::Status::unauthenticated("invalid api key")),
+        Err(_) => {
+            if let Some(rl) = &auth_state.rate_limit {
+                rl.auth_failure_limiter.record_failure(key_id);
+            }
+
+            Err(tonic::Status::unauthenticated("invalid api key"))
+        }
     }
 }
 
@@ -168,6 +229,8 @@ mod tests {
     use axum::routing::get;
     use axum_test::TestServer;
     use serde_json::json;
+
+    use crate::config::RateLimitConfig;
 
     fn make_dev_server() -> TestServer {
         let auth = AuthState::dev_mode();
@@ -270,21 +333,71 @@ mod tests {
         response.assert_status_ok();
     }
 
+    #[tokio::test]
+    async fn auth_failure_limiter_blocks_after_manual_failures() {
+        let repo = make_test_repo();
+        let rl_config = RateLimitConfig {
+            auth_failure_threshold: 2,
+            auth_failure_window_seconds: 60,
+            ..Default::default()
+        };
+        let rate_limit = RateLimitState::new(&rl_config);
+        let auth = AuthState::with_repository(repo).with_rate_limit(rate_limit.clone());
+
+        // Manually record failures to simulate auth failures
+        rate_limit.auth_failure_limiter.record_failure("blocked1");
+        rate_limit.auth_failure_limiter.record_failure("blocked1");
+
+        let server = make_auth_server(auth);
+        let key = "Bearer kraalzibar_blocked1_12345678901234567890123456789012";
+
+        let response = server
+            .get("/test")
+            .add_header(
+                axum::http::header::AUTHORIZATION,
+                axum::http::HeaderValue::from_static(key),
+            )
+            .await;
+        response.assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["error"].as_str().unwrap().contains("too many failed"),
+            "expected rate limit error message, got: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn grpc_auth_failure_limiter_blocks_after_threshold() {
+        let repo = make_test_repo();
+        let rl_config = RateLimitConfig {
+            auth_failure_threshold: 2,
+            auth_failure_window_seconds: 60,
+            ..Default::default()
+        };
+        let rate_limit = RateLimitState::new(&rl_config);
+        let auth = AuthState::with_repository(repo).with_rate_limit(rate_limit.clone());
+
+        rate_limit.auth_failure_limiter.record_failure("grpcblk1");
+        rate_limit.auth_failure_limiter.record_failure("grpcblk1");
+
+        let mut request = tonic::Request::new(());
+        request.metadata_mut().insert(
+            "authorization",
+            "Bearer kraalzibar_grpcblk1_12345678901234567890123456789012"
+                .parse()
+                .unwrap(),
+        );
+
+        let result = grpc_auth_interceptor(&auth, request);
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert!(status.message().contains("too many failed"));
+    }
+
     fn make_test_repo() -> Arc<ApiKeyRepository> {
-        // Create a repo pointing to a non-existent DB. Tests that need real DB
-        // lookups use testcontainers (ignored tests). For these unit tests, we
-        // test the middleware flow — the repo call will fail but we handle that.
-        //
-        // Since we can't connect to a real DB in unit tests, we use a mock
-        // approach: tests for "unknown key" work because the lookup returns an
-        // error (connection refused) which maps to 500, but we specifically test
-        // the auth header parsing flow.
-        //
-        // For the full happy-path test, see the integration tests.
-        //
-        // Actually, let's use a simulated approach: create a pool that will fail
-        // on query (lazy connect). sqlx PgPool with invalid URL will only fail
-        // on actual query execution, not on pool creation.
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/invalid")
