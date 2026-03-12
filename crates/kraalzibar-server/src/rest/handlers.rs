@@ -1032,4 +1032,23 @@ mod tests {
         let ids = body["resource_ids"].as_array().unwrap();
         assert_eq!(ids.len(), 1);
     }
+
+    #[tokio::test]
+    async fn responses_include_security_headers() {
+        let server = make_test_server();
+        let response = server.get("/healthz").await;
+        response.assert_status_ok();
+
+        assert_eq!(response.header("x-content-type-options"), "nosniff",);
+        assert_eq!(response.header("x-frame-options"), "DENY",);
+        assert_eq!(response.header("cache-control"), "no-store",);
+        assert_eq!(
+            response.header("content-security-policy"),
+            "default-src 'none'",
+        );
+        assert_eq!(
+            response.header("strict-transport-security"),
+            "max-age=63072000; includeSubDomains",
+        );
+    }
 }

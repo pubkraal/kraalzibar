@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
+use axum::http::header::HeaderValue;
 use axum::middleware;
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -81,6 +82,30 @@ async fn metrics_middleware<F: StoreFactory>(
     response
 }
 
+async fn security_headers_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static("default-src 'none'"),
+    );
+    headers.insert(
+        "strict-transport-security",
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    );
+
+    response
+}
+
 pub fn create_router<F>(state: AppState<F>, auth_state: AuthState) -> Router
 where
     F: StoreFactory + 'static,
@@ -112,5 +137,6 @@ where
             state.clone(),
             metrics_middleware,
         ))
+        .layer(middleware::from_fn(security_headers_middleware))
         .with_state(state)
 }
