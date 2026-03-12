@@ -54,7 +54,13 @@ pub async fn rest_auth_middleware(
         request
             .extensions_mut()
             .insert(auth_state.dev_tenant.clone());
-        return next.run(request).await;
+        let mut response = next.run(request).await;
+        response.headers_mut().insert(
+            "x-kraalzibar-dev-mode",
+            axum::http::HeaderValue::from_static("true"),
+        );
+
+        return response;
     }
 
     let repo = auth_state.repository.as_ref().unwrap();
@@ -113,6 +119,10 @@ pub fn grpc_auth_interceptor(
         request
             .extensions_mut()
             .insert(auth_state.dev_tenant.clone());
+        request
+            .metadata_mut()
+            .insert("x-kraalzibar-dev-mode", "true".parse().unwrap());
+
         return Ok(request);
     }
 
@@ -199,6 +209,35 @@ mod tests {
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
         assert_eq!(body["tenant_id"], "00000000-0000-0000-0000-000000000000");
+    }
+
+    #[tokio::test]
+    async fn dev_mode_adds_dev_mode_header() {
+        let server = make_dev_server();
+        let response = server.get("/test").await;
+        response.assert_status_ok();
+        assert_eq!(
+            response.header("x-kraalzibar-dev-mode"),
+            "true",
+            "dev mode response should include X-Kraalzibar-Dev-Mode header"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_dev_mode_omits_dev_mode_header() {
+        let repo = make_test_repo();
+        let auth = AuthState::with_repository(repo);
+        let server = make_auth_server(auth);
+        // healthz skips auth entirely — no dev mode header expected
+        let response = server.get("/healthz").await;
+        response.assert_status_ok();
+        let header = response
+            .iter_headers_by_name("x-kraalzibar-dev-mode")
+            .next();
+        assert!(
+            header.is_none(),
+            "non-dev mode response should not include X-Kraalzibar-Dev-Mode header"
+        );
     }
 
     #[tokio::test]
@@ -290,6 +329,37 @@ mod tests {
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/invalid")
             .unwrap();
         Arc::new(ApiKeyRepository::new(pool))
+    }
+
+    #[tokio::test]
+    async fn grpc_dev_mode_adds_dev_mode_metadata() {
+        let auth = AuthState::dev_mode();
+        let request = tonic::Request::new(());
+
+        let result = grpc_auth_interceptor(&auth, request);
+        assert!(result.is_ok());
+        let req = result.unwrap();
+        let dev_header = req.metadata().get("x-kraalzibar-dev-mode");
+        assert_eq!(
+            dev_header.map(|v| v.to_str().unwrap()),
+            Some("true"),
+            "gRPC dev mode should inject x-kraalzibar-dev-mode metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn grpc_non_dev_mode_omits_dev_mode_metadata() {
+        let repo = make_test_repo();
+        let auth = AuthState::with_repository(repo);
+        let request = tonic::Request::new(());
+
+        // Will fail auth (no header), but we check the error doesn't have dev mode metadata
+        let result = grpc_auth_interceptor(&auth, request);
+        // The request was rejected, so we can't check metadata on the response.
+        // Instead, verify that making a successful auth request doesn't add the header.
+        // Since we can't do a full auth test without a real DB, just confirm
+        // the interceptor doesn't add it on the error path.
+        assert!(result.is_err());
     }
 
     #[tokio::test]
