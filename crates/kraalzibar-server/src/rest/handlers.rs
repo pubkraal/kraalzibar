@@ -418,7 +418,7 @@ where
         Err(resp) => return resp,
     };
 
-    let limit = Some(req.limit.unwrap_or(DEFAULT_READ_LIMIT));
+    let limit = Some(req.limit.unwrap_or(DEFAULT_READ_LIMIT).min(10_000));
 
     match state
         .service
@@ -1007,6 +1007,26 @@ mod tests {
             !msg.contains("db connection"),
             "internal details must not leak to client"
         );
+    }
+
+    #[tokio::test]
+    async fn read_relationships_clamps_limit() {
+        let server = make_test_server();
+        write_tuple(&server, "readme", "viewer", "alice").await;
+
+        // Sending a limit far above max should be clamped to 10_000, not cause an error
+        let response = server
+            .post("/v1/relationships/read")
+            .json(&json!({
+                "filter": {"resource_type": "document"},
+                "limit": 99_999
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let rels = body["relationships"].as_array().unwrap();
+        assert_eq!(rels.len(), 1);
     }
 
     #[tokio::test]
