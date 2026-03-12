@@ -4,9 +4,16 @@ use kraalzibar_core::tuple::{
 
 use crate::proto::kraalzibar::v1;
 use crate::service::Consistency;
+use crate::validation::validate_identifier;
 
-pub fn proto_object_to_domain(obj: &v1::ObjectReference) -> ObjectRef {
-    ObjectRef::new(&obj.object_type, &obj.object_id)
+use super::validation_err_to_status;
+
+#[allow(clippy::result_large_err)]
+pub fn proto_object_to_domain(obj: &v1::ObjectReference) -> Result<ObjectRef, tonic::Status> {
+    validate_identifier("object_type", &obj.object_type).map_err(validation_err_to_status)?;
+    validate_identifier("object_id", &obj.object_id).map_err(validation_err_to_status)?;
+
+    Ok(ObjectRef::new(&obj.object_type, &obj.object_id))
 }
 
 pub fn domain_object_to_proto(obj: &ObjectRef) -> v1::ObjectReference {
@@ -16,11 +23,19 @@ pub fn domain_object_to_proto(obj: &ObjectRef) -> v1::ObjectReference {
     }
 }
 
-pub fn proto_subject_to_domain(subj: &v1::SubjectReference) -> SubjectRef {
-    match &subj.subject_relation {
+#[allow(clippy::result_large_err)]
+pub fn proto_subject_to_domain(subj: &v1::SubjectReference) -> Result<SubjectRef, tonic::Status> {
+    validate_identifier("subject_type", &subj.subject_type).map_err(validation_err_to_status)?;
+    validate_identifier("subject_id", &subj.subject_id).map_err(validation_err_to_status)?;
+
+    if let Some(ref rel) = subj.subject_relation {
+        validate_identifier("subject_relation", rel).map_err(validation_err_to_status)?;
+    }
+
+    Ok(match &subj.subject_relation {
         Some(rel) => SubjectRef::userset(&subj.subject_type, &subj.subject_id, rel),
         None => SubjectRef::direct(&subj.subject_type, &subj.subject_id),
-    }
+    })
 }
 
 pub fn domain_subject_to_proto(subj: &SubjectRef) -> v1::SubjectReference {
@@ -44,26 +59,52 @@ pub fn proto_relationship_to_write(rel: &v1::Relationship) -> Result<TupleWrite,
     let object = rel
         .object
         .as_ref()
-        .map(proto_object_to_domain)
         .ok_or_else(|| tonic::Status::invalid_argument("relationship object is required"))?;
+    let object = proto_object_to_domain(object)?;
+
     let subject = rel
         .subject
         .as_ref()
-        .map(proto_subject_to_domain)
         .ok_or_else(|| tonic::Status::invalid_argument("relationship subject is required"))?;
+    let subject = proto_subject_to_domain(subject)?;
+
+    validate_identifier("relation", &rel.relation).map_err(validation_err_to_status)?;
 
     Ok(TupleWrite::new(object, &rel.relation, subject))
 }
 
-pub fn proto_filter_to_domain(filter: &v1::RelationshipFilter) -> TupleFilter {
-    TupleFilter {
+#[allow(clippy::result_large_err)]
+pub fn proto_filter_to_domain(
+    filter: &v1::RelationshipFilter,
+) -> Result<TupleFilter, tonic::Status> {
+    if let Some(ref v) = filter.object_type {
+        validate_identifier("object_type", v).map_err(validation_err_to_status)?;
+    }
+
+    if let Some(ref v) = filter.object_id {
+        validate_identifier("object_id", v).map_err(validation_err_to_status)?;
+    }
+
+    if let Some(ref v) = filter.relation {
+        validate_identifier("relation", v).map_err(validation_err_to_status)?;
+    }
+
+    if let Some(ref v) = filter.subject_type {
+        validate_identifier("subject_type", v).map_err(validation_err_to_status)?;
+    }
+
+    if let Some(ref v) = filter.subject_id {
+        validate_identifier("subject_id", v).map_err(validation_err_to_status)?;
+    }
+
+    Ok(TupleFilter {
         object_type: filter.object_type.clone(),
         object_id: filter.object_id.clone(),
         relation: filter.relation.clone(),
         subject_type: filter.subject_type.clone(),
         subject_id: filter.subject_id.clone(),
         subject_relation: None,
-    }
+    })
 }
 
 #[allow(clippy::result_large_err)]
@@ -165,7 +206,7 @@ mod tests {
     fn convert_object_reference_round_trip() {
         let domain = ObjectRef::new("document", "readme");
         let proto = domain_object_to_proto(&domain);
-        let back = proto_object_to_domain(&proto);
+        let back = proto_object_to_domain(&proto).unwrap();
 
         assert_eq!(back.object_type, "document");
         assert_eq!(back.object_id, "readme");
@@ -175,7 +216,7 @@ mod tests {
     fn convert_direct_subject_round_trip() {
         let domain = SubjectRef::direct("user", "alice");
         let proto = domain_subject_to_proto(&domain);
-        let back = proto_subject_to_domain(&proto);
+        let back = proto_subject_to_domain(&proto).unwrap();
 
         assert_eq!(back.subject_type, "user");
         assert_eq!(back.subject_id, "alice");
@@ -186,7 +227,7 @@ mod tests {
     fn convert_userset_subject_round_trip() {
         let domain = SubjectRef::userset("group", "eng", "member");
         let proto = domain_subject_to_proto(&domain);
-        let back = proto_subject_to_domain(&proto);
+        let back = proto_subject_to_domain(&proto).unwrap();
 
         assert_eq!(back.subject_type, "group");
         assert_eq!(back.subject_id, "eng");
@@ -217,7 +258,7 @@ mod tests {
             subject_type: None,
             subject_id: None,
         };
-        let domain = proto_filter_to_domain(&proto);
+        let domain = proto_filter_to_domain(&proto).unwrap();
 
         assert_eq!(domain.object_type.as_deref(), Some("document"));
         assert!(domain.object_id.is_none());
@@ -277,5 +318,128 @@ mod tests {
 
         let none = snapshot_to_zed_token(None);
         assert!(none.is_none());
+    }
+
+    #[test]
+    fn proto_object_rejects_empty_object_type() {
+        let proto = v1::ObjectReference {
+            object_type: String::new(),
+            object_id: "readme".to_string(),
+        };
+        let result = proto_object_to_domain(&proto);
+
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status.message().contains("object_type"),
+            "expected field name in error, got: {}",
+            status.message()
+        );
+    }
+
+    #[test]
+    fn proto_object_rejects_too_long_object_id() {
+        let long = "a".repeat(257);
+        let proto = v1::ObjectReference {
+            object_type: "document".to_string(),
+            object_id: long,
+        };
+        let result = proto_object_to_domain(&proto);
+
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status.message().contains("object_id"),
+            "expected field name in error, got: {}",
+            status.message()
+        );
+    }
+
+    #[test]
+    fn proto_subject_rejects_empty_subject_type() {
+        let proto = v1::SubjectReference {
+            subject_type: String::new(),
+            subject_id: "alice".to_string(),
+            subject_relation: None,
+        };
+        let result = proto_subject_to_domain(&proto);
+
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn proto_subject_rejects_too_long_subject_relation() {
+        let long = "a".repeat(257);
+        let proto = v1::SubjectReference {
+            subject_type: "user".to_string(),
+            subject_id: "alice".to_string(),
+            subject_relation: Some(long),
+        };
+        let result = proto_subject_to_domain(&proto);
+
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn proto_relationship_to_write_validates_relation() {
+        let proto = v1::Relationship {
+            object: Some(v1::ObjectReference {
+                object_type: "document".to_string(),
+                object_id: "readme".to_string(),
+            }),
+            relation: String::new(),
+            subject: Some(v1::SubjectReference {
+                subject_type: "user".to_string(),
+                subject_id: "alice".to_string(),
+                subject_relation: None,
+            }),
+        };
+        let result = proto_relationship_to_write(&proto);
+
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status.message().contains("relation"),
+            "expected 'relation' in error, got: {}",
+            status.message()
+        );
+    }
+
+    #[test]
+    fn proto_filter_rejects_too_long_object_type() {
+        let long = "a".repeat(257);
+        let proto = v1::RelationshipFilter {
+            object_type: Some(long),
+            object_id: None,
+            relation: None,
+            subject_type: None,
+            subject_id: None,
+        };
+        let result = proto_filter_to_domain(&proto);
+
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn proto_filter_accepts_none_fields() {
+        let proto = v1::RelationshipFilter {
+            object_type: None,
+            object_id: None,
+            relation: None,
+            subject_type: None,
+            subject_id: None,
+        };
+        let result = proto_filter_to_domain(&proto);
+
+        assert!(result.is_ok());
     }
 }

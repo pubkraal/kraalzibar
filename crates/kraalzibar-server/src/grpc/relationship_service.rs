@@ -2,13 +2,16 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
+use kraalzibar_core::tuple::TupleFilter;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
 use crate::metrics::Metrics;
 use crate::proto::kraalzibar::v1::{self, relationship_service_server::RelationshipService};
 use crate::service::AuthzService;
 
-use super::{conversions, extract_tenant_id};
+use crate::validation::validate_batch_size;
+
+use super::{conversions, extract_tenant_id, validation_err_to_status};
 
 pub struct RelationshipServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
@@ -43,6 +46,8 @@ where
         let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
+        validate_batch_size(req.updates.len()).map_err(validation_err_to_status)?;
+
         let mut writes = Vec::new();
         let mut deletes = Vec::new();
 
@@ -68,7 +73,7 @@ where
                             subject_type: rel.subject.as_ref().map(|s| s.subject_type.clone()),
                             subject_id: rel.subject.as_ref().map(|s| s.subject_id.clone()),
                         },
-                    ));
+                    )?);
                 }
                 v1::relationship_update::Operation::Unspecified => {
                     return Err(Status::invalid_argument("operation must be specified"));
@@ -99,11 +104,10 @@ where
         let tenant_id = extract_tenant_id(&request)?;
         let req = request.into_inner();
 
-        let filter = req
-            .filter
-            .as_ref()
-            .map(conversions::proto_filter_to_domain)
-            .unwrap_or_default();
+        let filter = match req.filter.as_ref() {
+            Some(f) => conversions::proto_filter_to_domain(f)?,
+            None => TupleFilter::default(),
+        };
 
         let consistency = conversions::proto_consistency_to_domain(req.consistency.as_ref())?;
 

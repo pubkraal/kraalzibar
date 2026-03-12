@@ -12,7 +12,9 @@ use crate::service::{
     LookupSubjectsInput,
 };
 
-use super::{conversions, extract_tenant_id};
+use crate::validation::validate_identifier;
+
+use super::{conversions, extract_tenant_id, validation_err_to_status};
 
 pub struct PermissionServiceImpl<F: StoreFactory> {
     service: Arc<AuthzService<F>>,
@@ -53,6 +55,14 @@ where
         let subject = req
             .subject
             .ok_or_else(|| Status::invalid_argument("subject is required"))?;
+
+        validate_identifier("object_type", &resource.object_type)
+            .map_err(validation_err_to_status)?;
+        validate_identifier("object_id", &resource.object_id).map_err(validation_err_to_status)?;
+        validate_identifier("permission", &req.permission).map_err(validation_err_to_status)?;
+        validate_identifier("subject_type", &subject.subject_type)
+            .map_err(validation_err_to_status)?;
+        validate_identifier("subject_id", &subject.subject_id).map_err(validation_err_to_status)?;
 
         let input = CheckPermissionInput {
             object_type: resource.object_type,
@@ -97,6 +107,11 @@ where
             .resource
             .ok_or_else(|| Status::invalid_argument("resource is required"))?;
 
+        validate_identifier("object_type", &resource.object_type)
+            .map_err(validation_err_to_status)?;
+        validate_identifier("object_id", &resource.object_id).map_err(validation_err_to_status)?;
+        validate_identifier("permission", &req.permission).map_err(validation_err_to_status)?;
+
         let input = ExpandPermissionInput {
             object_type: resource.object_type,
             object_id: resource.object_id,
@@ -133,6 +148,13 @@ where
         let subject = req
             .subject
             .ok_or_else(|| Status::invalid_argument("subject is required"))?;
+
+        validate_identifier("resource_type", &req.resource_type)
+            .map_err(validation_err_to_status)?;
+        validate_identifier("permission", &req.permission).map_err(validation_err_to_status)?;
+        validate_identifier("subject_type", &subject.subject_type)
+            .map_err(validation_err_to_status)?;
+        validate_identifier("subject_id", &subject.subject_id).map_err(validation_err_to_status)?;
 
         let input = LookupResourcesInput {
             resource_type: req.resource_type,
@@ -185,6 +207,12 @@ where
         let resource = req
             .resource
             .ok_or_else(|| Status::invalid_argument("resource is required"))?;
+
+        validate_identifier("object_type", &resource.object_type)
+            .map_err(validation_err_to_status)?;
+        validate_identifier("object_id", &resource.object_id).map_err(validation_err_to_status)?;
+        validate_identifier("permission", &req.permission).map_err(validation_err_to_status)?;
+        validate_identifier("subject_type", &req.subject_type).map_err(validation_err_to_status)?;
 
         let input = LookupSubjectsInput {
             object_type: resource.object_type,

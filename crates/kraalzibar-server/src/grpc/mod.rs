@@ -10,6 +10,12 @@ pub use schema_service::SchemaServiceImpl;
 use kraalzibar_core::tuple::TenantId;
 use tonic::{Request, Status};
 
+use crate::validation;
+
+fn validation_err_to_status(err: validation::ValidationError) -> Status {
+    Status::invalid_argument(err.to_string())
+}
+
 #[allow(clippy::result_large_err)]
 fn extract_tenant_id<T>(request: &Request<T>) -> Result<TenantId, Status> {
     request
