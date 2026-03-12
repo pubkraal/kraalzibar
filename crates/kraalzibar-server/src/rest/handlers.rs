@@ -504,6 +504,7 @@ mod tests {
     use crate::error::ApiError;
     use crate::middleware::AuthState;
     use crate::service::AuthzService;
+    use axum::http::HeaderValue;
     use axum_test::TestServer;
     use kraalzibar_core::engine::EngineConfig;
     use kraalzibar_core::schema::SchemaLimits;
@@ -1031,5 +1032,55 @@ mod tests {
         let body: serde_json::Value = response.json();
         let ids = body["resource_ids"].as_array().unwrap();
         assert_eq!(ids.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cors_preflight_denies_all_origins() {
+        let server = make_test_server();
+
+        let response = server
+            .method(axum::http::Method::OPTIONS, "/v1/permissions/check")
+            .add_header(
+                axum::http::header::ORIGIN,
+                HeaderValue::from_static("https://evil.example.com"),
+            )
+            .add_header(
+                axum::http::header::ACCESS_CONTROL_REQUEST_METHOD,
+                HeaderValue::from_static("POST"),
+            )
+            .await;
+
+        // With a restrictive CORS policy (empty allow list), the response
+        // should NOT contain an Access-Control-Allow-Origin header.
+        let allow_origin = response
+            .headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN);
+        assert!(
+            allow_origin.is_none(),
+            "expected no Access-Control-Allow-Origin header, got: {allow_origin:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_simple_request_has_no_allow_origin() {
+        let server = make_test_server();
+
+        let response = server
+            .get("/healthz")
+            .add_header(
+                axum::http::header::ORIGIN,
+                HeaderValue::from_static("https://evil.example.com"),
+            )
+            .await;
+
+        response.assert_status_ok();
+
+        let allow_origin = response
+            .headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN);
+        assert!(
+            allow_origin.is_none(),
+            "expected no Access-Control-Allow-Origin header, got: {allow_origin:?}"
+        );
     }
 }
