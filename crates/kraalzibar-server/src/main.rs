@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::response::IntoResponse;
 use clap::Parser;
 use kraalzibar_server::api_key_repository::ApiKeyRepository;
 use kraalzibar_server::auth;
@@ -337,12 +338,27 @@ where
         service: Arc::clone(&service),
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = rest::create_router(rest_state, auth_state).route(
-        "/metrics",
-        axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
-    );
+    let request_timeout = std::time::Duration::from_secs(config.request_timeout_seconds);
+
+    let rest_router = rest::create_router(rest_state, auth_state)
+        .route(
+            "/metrics",
+            axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
+        )
+        .layer(axum::middleware::from_fn(
+            move |req, next: axum::middleware::Next| {
+                let timeout = request_timeout;
+                async move {
+                    match tokio::time::timeout(timeout, next.run(req)).await {
+                        Ok(response) => response,
+                        Err(_) => axum::http::StatusCode::REQUEST_TIMEOUT.into_response(),
+                    }
+                }
+            },
+        ));
 
     let grpc_router = tonic::transport::Server::builder()
+        .timeout(request_timeout)
         .add_service(health_service)
         .add_service(permission_svc)
         .add_service(relationship_svc)
