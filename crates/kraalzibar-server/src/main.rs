@@ -305,6 +305,7 @@ where
 
     let grpc_auth = {
         let auth = auth_state.clone();
+        #[allow(clippy::result_large_err)]
         move |req: tonic::Request<()>| -> Result<tonic::Request<()>, tonic::Status> {
             kraalzibar_server::middleware::grpc_auth_interceptor(&auth, req)
         }
