@@ -31,6 +31,18 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
+    RevokeApiKey {
+        #[arg(long)]
+        key_id: String,
+    },
+    ListApiKeys {
+        #[arg(long)]
+        tenant_name: String,
+    },
+    RotateApiKey {
+        #[arg(long)]
+        key_id: String,
+    },
 }
 
 #[cfg(test)]
@@ -146,5 +158,47 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
+
+    #[test]
+    fn cli_parses_revoke_api_key() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "revoke-api-key",
+            "--key-id",
+            "abc12345",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::RevokeApiKey { key_id }) if key_id == "abc12345"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_list_api_keys() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "list-api-keys",
+            "--tenant-name",
+            "acme",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::ListApiKeys { tenant_name }) if tenant_name == "acme"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_rotate_api_key() {
+        let cli = Cli::parse_from([
+            "kraalzibar-server",
+            "rotate-api-key",
+            "--key-id",
+            "abc12345",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::RotateApiKey { key_id }) if key_id == "abc12345"
+        ));
     }
 }

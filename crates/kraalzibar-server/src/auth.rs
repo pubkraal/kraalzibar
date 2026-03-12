@@ -18,6 +18,9 @@ pub enum AuthError {
     #[error("api key has been revoked")]
     RevokedKey,
 
+    #[error("api key has expired")]
+    ExpiredKey,
+
     #[error("internal authentication error: {0}")]
     Internal(String),
 }
@@ -28,6 +31,7 @@ pub struct ApiKeyRecord {
     pub key_hash: String,
     pub tenant_id: TenantId,
     pub revoked: bool,
+    pub expired: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +118,11 @@ pub fn authenticate(
         return Err(AuthError::RevokedKey);
     }
 
+    if record.expired {
+        audit::audit_auth_failure("api key expired", Some(key_id));
+        return Err(AuthError::ExpiredKey);
+    }
+
     let valid = verify_secret(secret, &record.key_hash)?;
     if !valid {
         audit::audit_auth_failure("invalid secret", Some(key_id));
@@ -182,6 +191,7 @@ mod tests {
             key_hash,
             tenant_id: tenant_id.clone(),
             revoked: false,
+            expired: false,
         };
 
         let ctx = authenticate(&full_key, |_| Some(record)).unwrap();
@@ -199,6 +209,7 @@ mod tests {
             key_hash,
             tenant_id: TenantId::new(uuid::Uuid::new_v4()),
             revoked: true,
+            expired: false,
         };
 
         let result = authenticate(&full_key, |_| Some(record));
@@ -221,9 +232,28 @@ mod tests {
             key_hash,
             tenant_id: TenantId::new(uuid::Uuid::new_v4()),
             revoked: false,
+            expired: false,
         };
 
         let result = authenticate("kraalzibar_testid_wrong_secret", |_| Some(record));
         assert!(matches!(result, Err(AuthError::UnknownKey)));
+    }
+
+    #[test]
+    fn authenticate_rejects_expired_key() {
+        let (full_key, secret) = generate_api_key();
+        let (key_id, _) = parse_api_key(&full_key).unwrap();
+        let key_hash = hash_secret(&secret).unwrap();
+
+        let record = ApiKeyRecord {
+            key_id: key_id.to_string(),
+            key_hash,
+            tenant_id: TenantId::new(uuid::Uuid::new_v4()),
+            revoked: false,
+            expired: true,
+        };
+
+        let result = authenticate(&full_key, |_| Some(record));
+        assert!(matches!(result, Err(AuthError::ExpiredKey)));
     }
 }
