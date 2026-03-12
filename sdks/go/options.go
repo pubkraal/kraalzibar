@@ -1,6 +1,7 @@
 package kraalzibar
 
 import (
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
@@ -11,6 +12,16 @@ type clientConfig struct {
 	apiKey      string
 	timeout     time.Duration
 	dialOptions []grpc.DialOption
+}
+
+// String returns a human-readable representation with the API key redacted.
+func (c clientConfig) String() string {
+	return fmt.Sprintf("{insecure:%v apiKey:[REDACTED] timeout:%v}", c.insecure, c.timeout)
+}
+
+// GoString returns a Go-syntax representation with the API key redacted.
+func (c clientConfig) GoString() string {
+	return c.String()
 }
 
 func defaultConfig() clientConfig {

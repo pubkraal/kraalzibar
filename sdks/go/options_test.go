@@ -1,6 +1,8 @@
 package kraalzibar
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,5 +45,33 @@ func TestWithTimeout_SetsDeadline(t *testing.T) {
 
 	if cfg.timeout != 5*time.Second {
 		t.Errorf("expected timeout 5s, got %v", cfg.timeout)
+	}
+}
+
+func TestClientConfig_StringRedactsAPIKey(t *testing.T) {
+	cfg := clientConfig{apiKey: "kraalzibar_abc_secret123"}
+
+	s := fmt.Sprintf("%v", cfg)
+
+	if strings.Contains(s, "secret123") {
+		t.Errorf("String() should not contain API key, got: %s", s)
+	}
+
+	if !strings.Contains(s, "[REDACTED]") {
+		t.Errorf("String() should contain [REDACTED], got: %s", s)
+	}
+}
+
+func TestClientConfig_GoStringRedactsAPIKey(t *testing.T) {
+	cfg := clientConfig{apiKey: "kraalzibar_abc_secret123"}
+
+	s := fmt.Sprintf("%#v", cfg)
+
+	if strings.Contains(s, "secret123") {
+		t.Errorf("GoString() should not contain API key, got: %s", s)
+	}
+
+	if !strings.Contains(s, "[REDACTED]") {
+		t.Errorf("GoString() should contain [REDACTED], got: %s", s)
 	}
 }
