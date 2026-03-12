@@ -99,6 +99,9 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         | ApiError::Storage(kraalzibar_storage::StorageError::SnapshotAhead { .. }) => {
             error_response(StatusCode::BAD_REQUEST, &err.to_string())
         }
+        ApiError::TooManyCandidates { .. } => {
+            error_response(StatusCode::UNPROCESSABLE_ENTITY, &err.to_string())
+        }
         ApiError::Check(CheckError::StorageError(_))
         | ApiError::Storage(kraalzibar_storage::StorageError::Internal(_)) => {
             tracing::error!(error = %err, "internal storage error");
@@ -1006,6 +1009,22 @@ mod tests {
         assert!(
             !msg.contains("db connection"),
             "internal details must not leak to client"
+        );
+    }
+
+    #[test]
+    fn too_many_candidates_returns_422() {
+        let err = ApiError::TooManyCandidates {
+            count: 50_001,
+            limit: 50_000,
+        };
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let msg = body.0["error"].as_str().unwrap();
+        assert!(
+            msg.contains("50001"),
+            "expected count in message, got: {msg}"
         );
     }
 

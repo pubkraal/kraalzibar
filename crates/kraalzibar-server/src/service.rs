@@ -380,9 +380,18 @@ where
         let store = Arc::new(store);
         let snapshot = self.resolve_snapshot(&*store, input.consistency).await?;
 
+        // Fetch one more than the limit to detect overflow without loading the full set
+        let candidate_limit = self.engine_config.max_lookup_candidates;
         let object_ids = store
-            .list_object_ids(&input.resource_type, snapshot, None)
+            .list_object_ids(&input.resource_type, snapshot, Some(candidate_limit + 1))
             .await?;
+
+        if object_ids.len() > candidate_limit {
+            return Err(ApiError::TooManyCandidates {
+                count: object_ids.len(),
+                limit: candidate_limit,
+            });
+        }
 
         let schema = self.load_schema_cached(tenant_id, &*store).await?;
 
@@ -1016,6 +1025,105 @@ mod tests {
             .unwrap();
 
         assert_eq!(output.resource_ids.len(), 2, "should respect limit of 2");
+    }
+
+    fn make_service_with_config(
+        config: EngineConfig,
+    ) -> (AuthzService<InMemoryStoreFactory>, TenantId) {
+        let factory = Arc::new(InMemoryStoreFactory::new());
+        let service = AuthzService::new(Arc::clone(&factory), config, SchemaLimits::default());
+        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
+        (service, tenant_id)
+    }
+
+    #[tokio::test]
+    async fn lookup_resources_rejects_too_many_candidates() {
+        let config = EngineConfig {
+            max_lookup_candidates: 3,
+            ..Default::default()
+        };
+        let (service, tenant_id) = make_service_with_config(config);
+        setup_schema(&service, &tenant_id).await;
+
+        // Write 4 documents — exceeds limit of 3
+        for i in 0..4 {
+            write_tuple(
+                &service,
+                &tenant_id,
+                "document",
+                &format!("doc{i}"),
+                "viewer",
+                "user",
+                "alice",
+            )
+            .await;
+        }
+
+        let result = service
+            .lookup_resources(
+                &tenant_id,
+                LookupResourcesInput {
+                    resource_type: "document".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                    limit: None,
+                },
+            )
+            .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(ApiError::TooManyCandidates { count: 4, limit: 3 })
+            ),
+            "expected TooManyCandidates error, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_resources_allows_candidates_at_limit() {
+        let config = EngineConfig {
+            max_lookup_candidates: 3,
+            ..Default::default()
+        };
+        let (service, tenant_id) = make_service_with_config(config);
+        setup_schema(&service, &tenant_id).await;
+
+        // Write exactly 3 documents — at the limit, should succeed
+        for i in 0..3 {
+            write_tuple(
+                &service,
+                &tenant_id,
+                "document",
+                &format!("doc{i}"),
+                "viewer",
+                "user",
+                "alice",
+            )
+            .await;
+        }
+
+        let result = service
+            .lookup_resources(
+                &tenant_id,
+                LookupResourcesInput {
+                    resource_type: "document".to_string(),
+                    permission: "can_view".to_string(),
+                    subject_type: "user".to_string(),
+                    subject_id: "alice".to_string(),
+                    consistency: Consistency::MinimizeLatency,
+                    limit: None,
+                },
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "expected success at exactly the limit, got: {result:?}"
+        );
+        assert_eq!(result.unwrap().resource_ids.len(), 3);
     }
 
     #[tokio::test]
