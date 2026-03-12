@@ -91,6 +91,7 @@ impl std::fmt::Debug for DatabaseConfig {
 pub struct EngineConfigValues {
     pub max_depth: usize,
     pub max_concurrent_branches: usize,
+    pub max_expand_results: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -176,6 +177,7 @@ impl Default for EngineConfigValues {
         Self {
             max_depth: 6,
             max_concurrent_branches: 10,
+            max_expand_results: 10_000,
         }
     }
 }
@@ -281,6 +283,11 @@ impl AppConfig {
         {
             self.engine.max_depth = n;
         }
+        if let Some(v) = env("KRAALZIBAR_ENGINE_MAX_EXPAND_RESULTS")
+            && let Ok(n) = v.parse()
+        {
+            self.engine.max_expand_results = n;
+        }
         if let Some(v) = env("KRAALZIBAR_CACHE_SCHEMA_CAPACITY")
             && let Ok(n) = v.parse()
         {
@@ -376,6 +383,11 @@ impl AppConfig {
                 ));
             }
         }
+        if self.engine.max_expand_results == 0 {
+            return Err(ConfigError::Validation(
+                "engine.max_expand_results must be non-zero".to_string(),
+            ));
+        }
         if self.engine.max_concurrent_branches == 0 {
             return Err(ConfigError::Validation(
                 "engine.max_concurrent_branches must be non-zero".to_string(),
@@ -440,6 +452,7 @@ impl AppConfig {
         kraalzibar_core::engine::EngineConfig {
             max_depth: self.engine.max_depth,
             max_concurrent_branches: self.engine.max_concurrent_branches,
+            max_expand_results: self.engine.max_expand_results,
         }
     }
 
@@ -559,6 +572,46 @@ port = 9090
         assert!(
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_depth"))
         );
+    }
+
+    #[test]
+    fn validation_rejects_zero_max_expand_results() {
+        let mut config = AppConfig::default();
+        config.engine.max_expand_results = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_expand_results"))
+        );
+    }
+
+    #[test]
+    fn default_config_includes_max_expand_results() {
+        let config = AppConfig::default();
+        assert_eq!(config.engine.max_expand_results, 10_000);
+    }
+
+    #[test]
+    fn env_override_max_expand_results() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_ENGINE_MAX_EXPAND_RESULTS" => Some("5000".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.engine.max_expand_results, 5000);
+    }
+
+    #[test]
+    fn to_engine_config_includes_max_expand_results() {
+        let mut config = AppConfig::default();
+        config.engine.max_expand_results = 7500;
+
+        let engine_config = config.to_engine_config();
+        assert_eq!(engine_config.max_expand_results, 7500);
     }
 
     #[test]
