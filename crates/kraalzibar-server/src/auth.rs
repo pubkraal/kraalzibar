@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use rand::rngs::OsRng;
 
@@ -58,6 +60,13 @@ pub fn hash_secret(secret: &str) -> Result<String, AuthError> {
     Ok(hash.to_string())
 }
 
+fn dummy_hash() -> &'static str {
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| {
+        hash_secret("dummy_timing_equalization").expect("dummy hash generation must succeed")
+    })
+}
+
 pub fn verify_secret(secret: &str, hash: &str) -> Result<bool, AuthError> {
     let parsed_hash = PasswordHash::new(hash).map_err(|e| AuthError::Internal(e.to_string()))?;
     Ok(Argon2::default()
@@ -104,7 +113,12 @@ pub fn authenticate(
     let record = match lookup(key_id) {
         Some(r) => r,
         None => {
+            // Perform dummy argon2 verification to prevent timing oracle:
+            // without this, an attacker can distinguish "key_id not found"
+            // (fast) from "key_id found but secret wrong" (slow argon2).
+            let _ = verify_secret("not_the_real_secret", dummy_hash());
             audit::audit_auth_failure("unknown api key", Some(key_id));
+
             return Err(AuthError::UnknownKey);
         }
     };
@@ -225,5 +239,30 @@ mod tests {
 
         let result = authenticate("kraalzibar_testid_wrong_secret", |_| Some(record));
         assert!(matches!(result, Err(AuthError::UnknownKey)));
+    }
+
+    #[test]
+    fn dummy_hash_returns_valid_argon2_hash() {
+        let hash = dummy_hash();
+        assert!(hash.starts_with("$argon2id$"));
+        // Should be parseable by PasswordHash
+        assert!(PasswordHash::new(hash).is_ok());
+    }
+
+    #[test]
+    fn authenticate_unknown_key_performs_dummy_verification() {
+        // This test verifies that authenticate with unknown key_id does NOT
+        // return instantly — it performs a dummy argon2 to prevent timing oracle.
+        // We verify this by checking the function still returns UnknownKey error.
+        let start = std::time::Instant::now();
+        let result = authenticate("kraalzibar_unknown_secret123456", |_| None);
+        let elapsed = start.elapsed();
+        assert!(matches!(result, Err(AuthError::UnknownKey)));
+        // Argon2 should take at least a few milliseconds
+        assert!(
+            elapsed.as_millis() >= 1,
+            "authenticate with unknown key returned too fast ({elapsed:?}), \
+             timing oracle mitigation may not be working"
+        );
     }
 }
