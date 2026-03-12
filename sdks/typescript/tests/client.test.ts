@@ -6,6 +6,7 @@ const mockFetch = (
   status: number,
   body: unknown,
   captureRequest?: { url?: string; init?: RequestInit },
+  extraHeaders?: Record<string, string>,
 ) => {
   return vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     if (captureRequest) {
@@ -15,7 +16,21 @@ const mockFetch = (
     return new Response(JSON.stringify(body), {
       status,
       statusText: status === 200 ? "OK" : "Error",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...extraHeaders },
+    });
+  }) as unknown as typeof globalThis.fetch;
+};
+
+const mockFetchWithTextBody = (
+  status: number,
+  text: string,
+  extraHeaders?: Record<string, string>,
+) => {
+  return vi.fn(async () => {
+    return new Response(text, {
+      status,
+      statusText: status === 200 ? "OK" : "Error",
+      headers: { "content-type": "application/json", ...extraHeaders },
     });
   }) as unknown as typeof globalThis.fetch;
 };
@@ -338,5 +353,128 @@ describe("authorization header", () => {
 
     const headers = captured.init?.headers as Record<string, string>;
     expect(headers["authorization"]).toBeUndefined();
+  });
+});
+
+describe("response size limit", () => {
+  it("should reject response when content-length exceeds default limit", async () => {
+    const client = createClient({
+      target: "http://localhost:8080",
+      fetch: mockFetch(200, { allowed: true }, undefined, {
+        "content-length": String(11 * 1024 * 1024),
+      }),
+    });
+
+    await expect(
+      client.checkPermission({
+        resource_type: "doc",
+        resource_id: "1",
+        permission: "view",
+        subject_type: "user",
+        subject_id: "alice",
+      }),
+    ).rejects.toThrow(KraalzibarError);
+
+    try {
+      await client.checkPermission({
+        resource_type: "doc",
+        resource_id: "1",
+        permission: "view",
+        subject_type: "user",
+        subject_id: "alice",
+      });
+    } catch (e) {
+      expect(e).toBeInstanceOf(KraalzibarError);
+      expect((e as KraalzibarError).code).toBe("RESOURCE_EXHAUSTED");
+      expect((e as KraalzibarError).message).toBe("response too large");
+    }
+  });
+
+  it("should reject response when body exceeds default limit", async () => {
+    const largeBody = "x".repeat(11 * 1024 * 1024);
+    const client = createClient({
+      target: "http://localhost:8080",
+      fetch: mockFetchWithTextBody(200, largeBody),
+    });
+
+    await expect(
+      client.checkPermission({
+        resource_type: "doc",
+        resource_id: "1",
+        permission: "view",
+        subject_type: "user",
+        subject_id: "alice",
+      }),
+    ).rejects.toThrow(KraalzibarError);
+
+    try {
+      await client.checkPermission({
+        resource_type: "doc",
+        resource_id: "1",
+        permission: "view",
+        subject_type: "user",
+        subject_id: "alice",
+      });
+    } catch (e) {
+      expect(e).toBeInstanceOf(KraalzibarError);
+      expect((e as KraalzibarError).code).toBe("RESOURCE_EXHAUSTED");
+      expect((e as KraalzibarError).message).toBe("response too large");
+    }
+  });
+
+  it("should allow response within the default limit", async () => {
+    const client = createClient({
+      target: "http://localhost:8080",
+      fetch: mockFetch(200, { allowed: true }, undefined, {
+        "content-length": String(1024),
+      }),
+    });
+
+    const result = await client.checkPermission({
+      resource_type: "doc",
+      resource_id: "1",
+      permission: "view",
+      subject_type: "user",
+      subject_id: "alice",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("should respect custom maxResponseSize option", async () => {
+    const client = createClient({
+      target: "http://localhost:8080",
+      maxResponseSize: 100,
+      fetch: mockFetch(200, { allowed: true }, undefined, {
+        "content-length": "200",
+      }),
+    });
+
+    await expect(
+      client.checkPermission({
+        resource_type: "doc",
+        resource_id: "1",
+        permission: "view",
+        subject_type: "user",
+        subject_id: "alice",
+      }),
+    ).rejects.toThrow(KraalzibarError);
+  });
+
+  it("should also check content-length on error responses", async () => {
+    const client = createClient({
+      target: "http://localhost:8080",
+      fetch: mockFetch(500, { error: "server error" }, undefined, {
+        "content-length": String(11 * 1024 * 1024),
+      }),
+    });
+
+    try {
+      await client.readSchema();
+    } catch (e) {
+      expect(e).toBeInstanceOf(KraalzibarError);
+      expect((e as KraalzibarError).code).toBe("RESOURCE_EXHAUSTED");
+      expect((e as KraalzibarError).message).toBe("response too large");
+    }
   });
 });
