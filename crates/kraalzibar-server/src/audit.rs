@@ -60,7 +60,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::layer::SubscriberExt;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct CapturedEvent {
         target: String,
         _message: String,
@@ -123,7 +123,7 @@ mod tests {
         };
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, f);
-        Arc::try_unwrap(events).unwrap().into_inner().unwrap()
+        events.lock().unwrap().clone()
     }
 
     fn has_field(event: &CapturedEvent, key: &str, value: &str) -> bool {
