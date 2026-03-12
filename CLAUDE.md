@@ -307,3 +307,12 @@ configuration instructions as they become available.
 - **rcgen 0.13 API change**: `CertificateParams::self_signed(&key_pair)`
   returns `Certificate` without a `key_pair` field. The `KeyPair` must be
   kept separately for `serialize_pem()`.
+- **Auth timing oracle mitigation**: When `key_id` is not found in the DB,
+  perform a dummy `argon2::verify_password` against a pre-computed hash
+  (via `OnceLock`) so that the response time is indistinguishable from a
+  real key lookup + verify. Without this, attackers can enumerate valid
+  key_ids by timing the difference.
+- **Auth cache uses `moka::sync::Cache`** (not `future`): The gRPC
+  interceptor runs in a sync context (`block_in_place`), so the auth cache
+  must be sync-safe. `moka::sync::Cache` works in both sync and async
+  contexts. Add the `"sync"` feature to moka in Cargo.toml.
