@@ -307,3 +307,9 @@ configuration instructions as they become available.
 - **rcgen 0.13 API change**: `CertificateParams::self_signed(&key_pair)`
   returns `Certificate` without a `key_pair` field. The `KeyPair` must be
   kept separately for `serialize_pem()`.
+- **Snapshot token obfuscation**: Tokens are XOR'd with a random server-local
+  key (`OnceLock<u64>`) and hex-encoded before being sent to clients. The
+  `token.rs` module in `kraalzibar-server` handles encode/decode. The client
+  SDK uses `OpaqueToken(String)` instead of `SnapshotToken(u64)` to treat
+  tokens as opaque. Go and TypeScript SDKs already treated tokens as strings
+  so they needed no changes.
