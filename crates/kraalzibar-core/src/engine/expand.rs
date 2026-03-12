@@ -170,6 +170,13 @@ impl<T: TupleReader> ExpandEngine<T> {
 
             let tuples = self.reader.read_tuples(&filter, ctx.snapshot).await?;
 
+            if tuples.len() > self.config.max_expand_results {
+                return Err(CheckError::TooManyResults {
+                    count: tuples.len(),
+                    limit: self.config.max_expand_results,
+                });
+            }
+
             let mut subjects = Vec::new();
             for tuple in &tuples {
                 if let Some(ref rel) = tuple.subject.subject_relation {
@@ -223,6 +230,13 @@ impl<T: TupleReader> ExpandEngine<T> {
         };
 
         let tuples = self.reader.read_tuples(&filter, ctx.snapshot).await?;
+
+        if tuples.len() > self.config.max_expand_results {
+            return Err(CheckError::TooManyResults {
+                count: tuples.len(),
+                limit: self.config.max_expand_results,
+            });
+        }
 
         let mut children = Vec::new();
         for tuple in &tuples {
@@ -628,6 +642,125 @@ mod tests {
             }
             other => panic!("expected This node, got: {other:?}"),
         }
+    }
+
+    fn make_expand_engine_with_config(
+        schema: Schema,
+        tuples: Vec<Tuple>,
+        config: EngineConfig,
+    ) -> ExpandEngine<TestStore> {
+        ExpandEngine::new(Arc::new(TestStore::new(tuples)), Arc::new(schema), config)
+    }
+
+    #[tokio::test]
+    async fn expand_this_errors_when_tuples_exceed_max_expand_results() {
+        let schema = Schema {
+            types: vec![TypeDefinition {
+                name: "document".to_string(),
+                relations: vec![RelationDef {
+                    name: "viewer".to_string(),
+                    subject_types: vec![],
+                }],
+                permissions: vec![PermissionDef {
+                    name: "view".to_string(),
+                    rule: RewriteRule::This("viewer".to_string()),
+                }],
+            }],
+        };
+
+        let tuples: Vec<Tuple> = (0..5)
+            .map(|i| {
+                Tuple::new(
+                    ObjectRef::new("document", "readme"),
+                    "viewer",
+                    SubjectRef::direct("user", format!("user_{i}")),
+                )
+            })
+            .collect();
+
+        let config = EngineConfig {
+            max_expand_results: 3,
+            ..Default::default()
+        };
+        let engine = make_expand_engine_with_config(schema, tuples, config);
+
+        let request = ExpandRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            snapshot: None,
+        };
+
+        let err = engine.expand(&request).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CheckError::TooManyResults { count: 5, limit: 3 }
+        ));
+    }
+
+    #[tokio::test]
+    async fn expand_arrow_errors_when_tuples_exceed_max_expand_results() {
+        let schema = Schema {
+            types: vec![
+                TypeDefinition {
+                    name: "folder".to_string(),
+                    relations: vec![RelationDef {
+                        name: "viewer".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::This("viewer".to_string()),
+                    }],
+                },
+                TypeDefinition {
+                    name: "document".to_string(),
+                    relations: vec![RelationDef {
+                        name: "parent".to_string(),
+                        subject_types: vec![],
+                    }],
+                    permissions: vec![PermissionDef {
+                        name: "view".to_string(),
+                        rule: RewriteRule::Arrow("parent".to_string(), "view".to_string()),
+                    }],
+                },
+            ],
+        };
+
+        let tuples: Vec<Tuple> = (0..5)
+            .map(|i| {
+                Tuple::new(
+                    ObjectRef::new("document", "readme"),
+                    "parent",
+                    SubjectRef::direct("folder", format!("folder_{i}")),
+                )
+            })
+            .collect();
+
+        let config = EngineConfig {
+            max_expand_results: 3,
+            ..Default::default()
+        };
+        let engine = make_expand_engine_with_config(schema, tuples, config);
+
+        let request = ExpandRequest {
+            object_type: "document".to_string(),
+            object_id: "readme".to_string(),
+            permission: "view".to_string(),
+            snapshot: None,
+        };
+
+        let err = engine.expand(&request).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CheckError::TooManyResults { count: 5, limit: 3 }
+        ));
+    }
+
+    #[tokio::test]
+    async fn expand_default_config_has_max_expand_results() {
+        let config = EngineConfig::default();
+        assert_eq!(config.max_expand_results, 10_000);
     }
 
     #[tokio::test]

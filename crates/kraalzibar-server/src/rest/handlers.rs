@@ -86,7 +86,8 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         | ApiError::Check(CheckError::PermissionNotFound { .. })
         | ApiError::Check(CheckError::RelationNotFound { .. })
         | ApiError::SchemaNotFound => error_response(StatusCode::NOT_FOUND, &err.to_string()),
-        ApiError::Check(CheckError::MaxDepthExceeded(_)) => {
+        ApiError::Check(CheckError::MaxDepthExceeded(_))
+        | ApiError::Check(CheckError::TooManyResults { .. }) => {
             error_response(StatusCode::UNPROCESSABLE_ENTITY, &err.to_string())
         }
         ApiError::Parse(_) | ApiError::Validation(_) => {
@@ -990,6 +991,23 @@ mod tests {
         assert!(
             msg.contains("ahead"),
             "expected 'ahead' in message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn too_many_results_returns_422() {
+        use kraalzibar_core::engine::CheckError;
+        let err = ApiError::Check(CheckError::TooManyResults {
+            count: 15_000,
+            limit: 10_000,
+        });
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let msg = body.0["error"].as_str().unwrap();
+        assert!(
+            msg.contains("too many results"),
+            "expected 'too many results' in message, got: {msg}"
         );
     }
 

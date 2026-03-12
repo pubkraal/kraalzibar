@@ -29,7 +29,8 @@ fn api_error_to_status(err: crate::error::ApiError) -> Status {
         | ApiError::Check(CheckError::RelationNotFound { .. }) => {
             Status::not_found(err.to_string())
         }
-        ApiError::Check(CheckError::MaxDepthExceeded(_)) => {
+        ApiError::Check(CheckError::MaxDepthExceeded(_))
+        | ApiError::Check(CheckError::TooManyResults { .. }) => {
             Status::resource_exhausted(err.to_string())
         }
         ApiError::Storage(kraalzibar_storage::StorageError::EmptyDeleteFilter)
@@ -78,6 +79,23 @@ mod tests {
         assert!(
             status.message().contains("ahead"),
             "expected 'ahead' in message, got: {}",
+            status.message()
+        );
+    }
+
+    #[test]
+    fn too_many_results_maps_to_resource_exhausted() {
+        use kraalzibar_core::engine::CheckError;
+        let err = ApiError::Check(CheckError::TooManyResults {
+            count: 15_000,
+            limit: 10_000,
+        });
+        let status = api_error_to_status(err);
+
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert!(
+            status.message().contains("too many results"),
+            "expected 'too many results' in message, got: {}",
             status.message()
         );
     }
