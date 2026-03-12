@@ -8,6 +8,7 @@ use kraalzibar_core::tuple::{
 use crate::traits::{RelationshipStore, SchemaStore, StorageError, StoreFactory};
 
 const ACTIVE_TX_ID: u64 = u64::MAX;
+const DEFAULT_GC_THRESHOLD: usize = 100_000;
 
 #[derive(Debug, Clone)]
 struct StoredTuple {
@@ -61,6 +62,7 @@ struct InnerState {
     current_tx: u64,
     tuples: Vec<StoredTuple>,
     schema: Option<String>,
+    gc_threshold: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,7 @@ impl Default for InMemoryStore {
                 current_tx: 0,
                 tuples: Vec::new(),
                 schema: None,
+                gc_threshold: DEFAULT_GC_THRESHOLD,
             })),
         }
     }
@@ -83,6 +86,17 @@ impl Default for InMemoryStore {
 impl InMemoryStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_gc_threshold(threshold: usize) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(InnerState {
+                current_tx: 0,
+                tuples: Vec::new(),
+                schema: None,
+                gc_threshold: threshold,
+            })),
+        }
     }
 }
 
@@ -148,6 +162,10 @@ impl RelationshipStore for InMemoryStore {
                 created_tx_id: tx_id,
                 deleted_tx_id: ACTIVE_TX_ID,
             });
+        }
+
+        if state.tuples.len() > state.gc_threshold {
+            state.tuples.retain(StoredTuple::is_active);
         }
 
         Ok(SnapshotToken::new(tx_id))
@@ -941,6 +959,101 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(StorageError::SnapshotAhead { .. })));
+    }
+
+    #[tokio::test]
+    async fn auto_gc_compacts_deleted_tuples_when_threshold_exceeded() {
+        let store = InMemoryStore::with_gc_threshold(50);
+
+        for i in 0..50 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        store.write(&[], &[delete_filter]).await.unwrap();
+
+        for i in 50..55 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+
+        let state = store.state.lock().unwrap();
+        let total_stored = state.tuples.len();
+        let deleted_count = state.tuples.iter().filter(|t| !t.is_active()).count();
+
+        assert_eq!(deleted_count, 0, "soft-deleted tuples should be compacted");
+        assert_eq!(total_stored, 5, "only 5 active tuples should remain");
+    }
+
+    #[tokio::test]
+    async fn auto_gc_does_not_compact_below_threshold() {
+        let store = InMemoryStore::with_gc_threshold(100);
+
+        for i in 0..10 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        store.write(&[], &[delete_filter]).await.unwrap();
+
+        store
+            .write(&[make_write("doc", "new", "viewer", direct_user("a"))], &[])
+            .await
+            .unwrap();
+
+        let state = store.state.lock().unwrap();
+        let deleted_count = state.tuples.iter().filter(|t| !t.is_active()).count();
+
+        assert_eq!(
+            deleted_count, 10,
+            "soft-deleted tuples should remain when below threshold"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_store_has_default_gc_threshold() {
+        let store = InMemoryStore::new();
+
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.gc_threshold, DEFAULT_GC_THRESHOLD);
     }
 
     #[tokio::test]
