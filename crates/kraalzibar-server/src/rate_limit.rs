@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use moka::sync::Cache;
@@ -6,7 +7,7 @@ use moka::sync::Cache;
 use crate::config::RateLimitConfig;
 
 pub struct AuthFailureLimiter {
-    cache: Cache<String, u32>,
+    cache: Cache<String, Arc<AtomicU32>>,
     threshold: u32,
 }
 
@@ -28,7 +29,9 @@ impl AuthFailureLimiter {
             return false;
         }
 
-        self.cache.get(key_id).is_some_and(|c| c >= self.threshold)
+        self.cache
+            .get(key_id)
+            .is_some_and(|c| c.load(Ordering::Relaxed) >= self.threshold)
     }
 
     pub fn record_failure(&self, key_id: &str) {
@@ -36,8 +39,11 @@ impl AuthFailureLimiter {
             return;
         }
 
-        let current = self.cache.get(key_id).unwrap_or(0);
-        self.cache.insert(key_id.to_string(), current + 1);
+        let counter = self
+            .cache
+            .get_with_by_ref(key_id, || Arc::new(AtomicU32::new(0)));
+
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_success(&self, key_id: &str) {
@@ -46,7 +52,7 @@ impl AuthFailureLimiter {
 }
 
 pub struct TenantRateLimiter {
-    cache: Cache<String, u32>,
+    cache: Cache<String, Arc<AtomicU32>>,
     max_per_second: u32,
 }
 
@@ -72,15 +78,13 @@ impl TenantRateLimiter {
             return true;
         }
 
-        let current = self.cache.get(tenant_id).unwrap_or(0);
+        let counter = self
+            .cache
+            .get_with_by_ref(tenant_id, || Arc::new(AtomicU32::new(0)));
 
-        if current >= self.max_per_second {
-            return false;
-        }
+        let prev = counter.fetch_add(1, Ordering::Relaxed);
 
-        self.cache.insert(tenant_id.to_string(), current + 1);
-
-        true
+        prev < self.max_per_second
     }
 }
 
