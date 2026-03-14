@@ -1050,8 +1050,6 @@ mod tests {
             )
             .await;
 
-        // With a restrictive CORS policy (empty allow list), the response
-        // should NOT contain an Access-Control-Allow-Origin header.
         let allow_origin = response
             .headers()
             .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN);
