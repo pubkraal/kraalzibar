@@ -90,6 +90,26 @@ func TestClientConfig_PlusVRedactsAPIKey(t *testing.T) {
 	}
 }
 
+func TestRedactedString_TypeVerb(t *testing.T) {
+	got := fmt.Sprintf("%T", redactedString("key"))
+
+	want := "kraalzibar.redactedString"
+	if got != want {
+		t.Errorf("%%T = %q, want %q", got, want)
+	}
+}
+
+func TestClientConfig_TypeVerb(t *testing.T) {
+	cfg := clientConfig{apiKey: "secret"}
+
+	got := fmt.Sprintf("%T", cfg)
+
+	want := "kraalzibar.clientConfig"
+	if got != want {
+		t.Errorf("%%T = %q, want %q", got, want)
+	}
+}
+
 func TestRedactedString_AllFormatVerbs(t *testing.T) {
 	secret := redactedString("super-secret-key")
 

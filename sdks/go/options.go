@@ -12,6 +12,12 @@ type redactedString string
 func (r redactedString) String() string   { return "[REDACTED]" }
 func (r redactedString) GoString() string { return `redactedString("[REDACTED]")` }
 func (r redactedString) Format(f fmt.State, verb rune) {
+	if verb == 'T' {
+		fmt.Fprint(f, "kraalzibar.redactedString")
+
+		return
+	}
+
 	fmt.Fprint(f, "[REDACTED]")
 }
 
@@ -34,6 +40,12 @@ func (c clientConfig) GoString() string {
 
 // Format implements fmt.Formatter to ensure all format verbs redact the API key.
 func (c clientConfig) Format(f fmt.State, verb rune) {
+	if verb == 'T' {
+		fmt.Fprint(f, "kraalzibar.clientConfig")
+
+		return
+	}
+
 	fmt.Fprint(f, c.String())
 }
 
