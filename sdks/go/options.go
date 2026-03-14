@@ -1,16 +1,52 @@
 package kraalzibar
 
 import (
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
 )
 
+type redactedString string
+
+func (r redactedString) String() string   { return "[REDACTED]" }
+func (r redactedString) GoString() string { return `redactedString("[REDACTED]")` }
+func (r redactedString) Format(f fmt.State, verb rune) {
+	if verb == 'T' {
+		fmt.Fprint(f, "kraalzibar.redactedString")
+
+		return
+	}
+
+	fmt.Fprint(f, "[REDACTED]")
+}
+
 type clientConfig struct {
 	insecure    bool
-	apiKey      string
+	apiKey      redactedString
 	timeout     time.Duration
 	dialOptions []grpc.DialOption
+}
+
+// String returns a human-readable representation with the API key redacted.
+func (c clientConfig) String() string {
+	return fmt.Sprintf("{insecure:%v apiKey:[REDACTED] timeout:%v}", c.insecure, c.timeout)
+}
+
+// GoString returns a Go-syntax representation with the API key redacted.
+func (c clientConfig) GoString() string {
+	return c.String()
+}
+
+// Format implements fmt.Formatter to ensure all format verbs redact the API key.
+func (c clientConfig) Format(f fmt.State, verb rune) {
+	if verb == 'T' {
+		fmt.Fprint(f, "kraalzibar.clientConfig")
+
+		return
+	}
+
+	fmt.Fprint(f, c.String())
 }
 
 func defaultConfig() clientConfig {
@@ -32,7 +68,7 @@ func WithInsecure() ClientOption {
 // WithAPIKey sets the Bearer token for authentication.
 func WithAPIKey(key string) ClientOption {
 	return func(c *clientConfig) {
-		c.apiKey = key
+		c.apiKey = redactedString(key)
 	}
 }
 
