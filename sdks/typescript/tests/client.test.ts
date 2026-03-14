@@ -477,4 +477,20 @@ describe("response size limit", () => {
       expect((e as KraalzibarError).message).toBe("response too large");
     }
   });
+
+  it("should reject large error body without content-length header", async () => {
+    const largeBody = "x".repeat(11 * 1024 * 1024);
+    const client = createClient({
+      target: "http://localhost:8080",
+      fetch: mockFetchWithTextBody(500, largeBody),
+    });
+
+    try {
+      await client.readSchema();
+    } catch (e) {
+      expect(e).toBeInstanceOf(KraalzibarError);
+      expect((e as KraalzibarError).code).toBe("RESOURCE_EXHAUSTED");
+      expect((e as KraalzibarError).message).toBe("response too large");
+    }
+  });
 });

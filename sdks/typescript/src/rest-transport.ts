@@ -38,17 +38,20 @@ export const createRestTransport = (
       throw new KraalzibarError("RESOURCE_EXHAUSTED", "response too large");
     }
 
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxResponseSize) {
+      throw new KraalzibarError("RESOURCE_EXHAUSTED", "response too large");
+    }
+
+    const text = new TextDecoder().decode(buffer);
+
     if (response.ok) {
-      const text = await response.text();
-      if (text.length > maxResponseSize) {
-        throw new KraalzibarError("RESOURCE_EXHAUSTED", "response too large");
-      }
       return JSON.parse(text) as T;
     }
 
     let message = response.statusText;
     try {
-      const body = await response.json();
+      const body = JSON.parse(text);
       if (typeof body === "object" && body !== null && "error" in body) {
         message = String((body as { error: unknown }).error);
       }
