@@ -98,16 +98,13 @@ mod tests {
 
     #[test]
     fn too_many_candidates_maps_to_resource_exhausted() {
-        let err = ApiError::TooManyCandidates {
-            count: 50_001,
-            limit: 50_000,
-        };
+        let err = ApiError::TooManyCandidates { limit: 50_000 };
         let status = api_error_to_status(err);
 
         assert_eq!(status.code(), tonic::Code::ResourceExhausted);
         assert!(
-            status.message().contains("50001"),
-            "expected count in message, got: {}",
+            status.message().contains("50000"),
+            "expected limit in message, got: {}",
             status.message()
         );
     }

@@ -383,12 +383,15 @@ where
         // Fetch one more than the limit to detect overflow without loading the full set
         let candidate_limit = self.engine_config.max_lookup_candidates;
         let object_ids = store
-            .list_object_ids(&input.resource_type, snapshot, Some(candidate_limit + 1))
+            .list_object_ids(
+                &input.resource_type,
+                snapshot,
+                Some(candidate_limit.saturating_add(1)),
+            )
             .await?;
 
         if object_ids.len() > candidate_limit {
             return Err(ApiError::TooManyCandidates {
-                count: object_ids.len(),
                 limit: candidate_limit,
             });
         }
@@ -1074,10 +1077,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(
-                result,
-                Err(ApiError::TooManyCandidates { count: 4, limit: 3 })
-            ),
+            matches!(result, Err(ApiError::TooManyCandidates { limit: 3 })),
             "expected TooManyCandidates error, got: {result:?}"
         );
     }

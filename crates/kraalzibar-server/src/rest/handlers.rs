@@ -1014,17 +1014,14 @@ mod tests {
 
     #[test]
     fn too_many_candidates_returns_422() {
-        let err = ApiError::TooManyCandidates {
-            count: 50_001,
-            limit: 50_000,
-        };
+        let err = ApiError::TooManyCandidates { limit: 50_000 };
         let (status, body) = api_error_to_response(err);
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         let msg = body.0["error"].as_str().unwrap();
         assert!(
-            msg.contains("50001"),
-            "expected count in message, got: {msg}"
+            msg.contains("50000"),
+            "expected limit in message, got: {msg}"
         );
     }
 
