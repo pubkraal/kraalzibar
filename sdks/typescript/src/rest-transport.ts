@@ -1,9 +1,12 @@
 import { KraalzibarError, mapHttpStatus } from "./error.js";
 
+export const DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10 MB
+
 export type RestTransportOptions = {
   target: string;
   apiKey?: string;
   timeout?: number;
+  maxResponseSize?: number;
 };
 
 export type RestTransport = {
@@ -17,6 +20,7 @@ export const createRestTransport = (
 ): RestTransport => {
   const baseUrl = options.target.replace(/\/$/, "");
   const timeout = options.timeout ?? 30_000;
+  const maxResponseSize = options.maxResponseSize ?? DEFAULT_MAX_RESPONSE_SIZE;
 
   const headers = (): Record<string, string> => {
     const h: Record<string, string> = {
@@ -29,13 +33,25 @@ export const createRestTransport = (
   };
 
   const handleResponse = async <T>(response: Response): Promise<T> => {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > maxResponseSize) {
+      throw new KraalzibarError("RESOURCE_EXHAUSTED", "response too large");
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxResponseSize) {
+      throw new KraalzibarError("RESOURCE_EXHAUSTED", "response too large");
+    }
+
+    const text = new TextDecoder().decode(buffer);
+
     if (response.ok) {
-      return (await response.json()) as T;
+      return JSON.parse(text) as T;
     }
 
     let message = response.statusText;
     try {
-      const body = await response.json();
+      const body = JSON.parse(text);
       if (typeof body === "object" && body !== null && "error" in body) {
         message = String((body as { error: unknown }).error);
       }
