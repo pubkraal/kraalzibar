@@ -351,7 +351,11 @@ where
                 async move {
                     match tokio::time::timeout(timeout, next.run(req)).await {
                         Ok(response) => response,
-                        Err(_) => axum::http::StatusCode::REQUEST_TIMEOUT.into_response(),
+                        Err(_) => (
+                            axum::http::StatusCode::REQUEST_TIMEOUT,
+                            axum::Json(serde_json::json!({ "error": "request timeout" })),
+                        )
+                            .into_response(),
                     }
                 }
             },
