@@ -337,7 +337,7 @@ where
         service: Arc::clone(&service),
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = rest::create_router(rest_state, auth_state).route(
+    let rest_router = rest::create_router(rest_state, auth_state, config.tls.is_enabled()).route(
         "/metrics",
         axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
     );
