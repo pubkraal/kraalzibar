@@ -1,4 +1,3 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -18,17 +17,11 @@ const MAX_CONCURRENT_ARGON2: usize = 4;
 pub struct AuthState {
     repository: Option<Arc<ApiKeyRepository>>,
     dev_tenant: TenantId,
-    auth_cache: moka::sync::Cache<u64, TenantId>,
+    auth_cache: moka::sync::Cache<String, TenantId>,
     argon2_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
-fn hash_key(raw_key: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    raw_key.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn build_auth_cache() -> moka::sync::Cache<u64, TenantId> {
+fn build_auth_cache() -> moka::sync::Cache<String, TenantId> {
     moka::sync::Cache::builder()
         .time_to_live(std::time::Duration::from_secs(AUTH_CACHE_TTL_SECONDS))
         .max_capacity(AUTH_CACHE_CAPACITY)
@@ -109,8 +102,7 @@ pub async fn rest_auth_middleware(
     };
 
     // Check auth cache — avoids expensive argon2 for recently verified keys
-    let key_hash = hash_key(raw_key);
-    if let Some(tenant_id) = auth_state.auth_cache.get(&key_hash) {
+    if let Some(tenant_id) = auth_state.auth_cache.get(raw_key) {
         request.extensions_mut().insert(tenant_id);
 
         return next.run(request).await;
@@ -132,7 +124,7 @@ pub async fn rest_auth_middleware(
         Ok(ctx) => {
             auth_state
                 .auth_cache
-                .insert(key_hash, ctx.tenant_id.clone());
+                .insert(raw_key.to_string(), ctx.tenant_id.clone());
             request.extensions_mut().insert(ctx.tenant_id);
             next.run(request).await
         }
@@ -169,8 +161,7 @@ pub fn grpc_auth_interceptor(
         .map_err(|_| tonic::Status::unauthenticated("invalid api key format"))?;
 
     // Check auth cache — avoids expensive argon2 for recently verified keys
-    let key_hash_val = hash_key(raw_key);
-    if let Some(tenant_id) = auth_state.auth_cache.get(&key_hash_val) {
+    if let Some(tenant_id) = auth_state.auth_cache.get(raw_key) {
         request.extensions_mut().insert(tenant_id);
 
         return Ok(request);
@@ -200,7 +191,7 @@ pub fn grpc_auth_interceptor(
         Ok(ctx) => {
             auth_state
                 .auth_cache
-                .insert(key_hash_val, ctx.tenant_id.clone());
+                .insert(raw_key.clone(), ctx.tenant_id.clone());
             request.extensions_mut().insert(ctx.tenant_id);
             Ok(request)
         }
@@ -423,26 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn hash_key_is_deterministic() {
-        let key = "kraalzibar_test_secret";
-        assert_eq!(hash_key(key), hash_key(key));
-    }
-
-    #[test]
-    fn hash_key_differs_for_different_keys() {
-        let h1 = hash_key("kraalzibar_test1_secret1");
-        let h2 = hash_key("kraalzibar_test2_secret2");
-        assert_ne!(h1, h2);
-    }
-
-    #[test]
     fn auth_cache_stores_and_retrieves_tenant_id() {
         let auth = AuthState::dev_mode();
         let tenant_id = TenantId::new(uuid::Uuid::new_v4());
-        let key_hash = hash_key("kraalzibar_test_secret");
+        let key = "kraalzibar_test_secret".to_string();
 
-        auth.auth_cache.insert(key_hash, tenant_id.clone());
-        let cached = auth.auth_cache.get(&key_hash);
+        auth.auth_cache.insert(key.clone(), tenant_id.clone());
+        let cached = auth.auth_cache.get(&key);
         assert!(cached.is_some());
         assert_eq!(cached.unwrap(), tenant_id);
     }
