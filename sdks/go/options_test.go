@@ -34,8 +34,8 @@ func TestWithAPIKey_SetsCredentials(t *testing.T) {
 	cfg := defaultConfig()
 	WithAPIKey("test-key")(&cfg)
 
-	if cfg.apiKey != "test-key" {
-		t.Errorf("expected apiKey %q, got %q", "test-key", cfg.apiKey)
+	if string(cfg.apiKey) != "test-key" {
+		t.Errorf("expected apiKey %q, got %q", "test-key", string(cfg.apiKey))
 	}
 }
 
@@ -73,5 +73,46 @@ func TestClientConfig_GoStringRedactsAPIKey(t *testing.T) {
 
 	if !strings.Contains(s, "[REDACTED]") {
 		t.Errorf("GoString() should contain [REDACTED], got: %s", s)
+	}
+}
+
+func TestClientConfig_PlusVRedactsAPIKey(t *testing.T) {
+	cfg := clientConfig{apiKey: "kraalzibar_abc_secret123"}
+
+	s := fmt.Sprintf("%+v", cfg)
+
+	if strings.Contains(s, "secret123") {
+		t.Errorf("%%+v should not contain API key, got: %s", s)
+	}
+
+	if !strings.Contains(s, "[REDACTED]") {
+		t.Errorf("%%+v should contain [REDACTED], got: %s", s)
+	}
+}
+
+func TestRedactedString_AllFormatVerbs(t *testing.T) {
+	secret := redactedString("super-secret-key")
+
+	verbs := []struct {
+		name   string
+		format string
+	}{
+		{"percent-s", "%s"},
+		{"percent-v", "%v"},
+		{"percent-plus-v", "%+v"},
+		{"percent-hash-v", "%#v"},
+		{"percent-q", "%q"},
+	}
+
+	for _, tt := range verbs {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fmt.Sprintf(tt.format, secret)
+			if strings.Contains(got, "super-secret-key") {
+				t.Errorf("format %s leaked secret: %s", tt.format, got)
+			}
+			if !strings.Contains(got, "REDACTED") {
+				t.Errorf("format %s missing REDACTED: %s", tt.format, got)
+			}
+		})
 	}
 }
