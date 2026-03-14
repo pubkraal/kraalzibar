@@ -10,6 +10,7 @@ pub mod health;
 pub mod metrics;
 pub mod middleware;
 pub mod proto;
+pub mod rate_limit;
 pub mod rest;
 pub mod service;
 pub mod telemetry;

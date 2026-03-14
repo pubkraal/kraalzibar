@@ -13,6 +13,27 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     pub tracing: TracingConfig,
     pub tls: TlsConfig,
+    pub rate_limit: RateLimitConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RateLimitConfig {
+    pub max_concurrent_requests: usize,
+    pub max_requests_per_tenant_per_second: u32,
+    pub auth_failure_threshold: u32,
+    pub auth_failure_window_seconds: u64,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_requests: 1000,
+            max_requests_per_tenant_per_second: 100,
+            auth_failure_threshold: 10,
+            auth_failure_window_seconds: 60,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -325,6 +346,26 @@ impl AppConfig {
         {
             self.tracing.sample_rate = rate;
         }
+        if let Some(v) = env("KRAALZIBAR_RATE_LIMIT_MAX_CONCURRENT_REQUESTS")
+            && let Ok(n) = v.parse()
+        {
+            self.rate_limit.max_concurrent_requests = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_RATE_LIMIT_MAX_REQUESTS_PER_TENANT_PER_SECOND")
+            && let Ok(n) = v.parse()
+        {
+            self.rate_limit.max_requests_per_tenant_per_second = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_RATE_LIMIT_AUTH_FAILURE_THRESHOLD")
+            && let Ok(n) = v.parse()
+        {
+            self.rate_limit.auth_failure_threshold = n;
+        }
+        if let Some(v) = env("KRAALZIBAR_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS")
+            && let Ok(n) = v.parse()
+        {
+            self.rate_limit.auth_failure_window_seconds = n;
+        }
         if let Some(v) = env("KRAALZIBAR_TLS_CERT_PATH") {
             self.tls.cert_path = v;
         }
@@ -424,6 +465,11 @@ impl AppConfig {
         if self.tracing.enabled && self.tracing.otlp_endpoint.is_empty() {
             return Err(ConfigError::Validation(
                 "tracing.otlp_endpoint must not be empty when tracing is enabled".to_string(),
+            ));
+        }
+        if self.rate_limit.auth_failure_window_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "rate_limit.auth_failure_window_seconds must be non-zero".to_string(),
             ));
         }
         let has_cert = !self.tls.cert_path.is_empty();
@@ -931,6 +977,91 @@ key_path = "/etc/kraalzibar/tls/server.key"
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("tls")),
             "expected validation error for partial TLS config: {result:?}"
         );
+    }
+
+    // --- Rate Limit Config Tests ---
+
+    #[test]
+    fn rate_limit_config_defaults() {
+        let config = RateLimitConfig::default();
+
+        assert_eq!(config.max_concurrent_requests, 1000);
+        assert_eq!(config.max_requests_per_tenant_per_second, 100);
+        assert_eq!(config.auth_failure_threshold, 10);
+        assert_eq!(config.auth_failure_window_seconds, 60);
+    }
+
+    #[test]
+    fn rate_limit_config_from_toml() {
+        let toml_str = r#"
+[rate_limit]
+max_concurrent_requests = 500
+max_requests_per_tenant_per_second = 50
+auth_failure_threshold = 5
+auth_failure_window_seconds = 120
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.rate_limit.max_concurrent_requests, 500);
+        assert_eq!(config.rate_limit.max_requests_per_tenant_per_second, 50);
+        assert_eq!(config.rate_limit.auth_failure_threshold, 5);
+        assert_eq!(config.rate_limit.auth_failure_window_seconds, 120);
+    }
+
+    #[test]
+    fn rate_limit_config_env_overrides() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_RATE_LIMIT_MAX_CONCURRENT_REQUESTS" => Some("2000".to_string()),
+                "KRAALZIBAR_RATE_LIMIT_MAX_REQUESTS_PER_TENANT_PER_SECOND" => {
+                    Some("200".to_string())
+                }
+                "KRAALZIBAR_RATE_LIMIT_AUTH_FAILURE_THRESHOLD" => Some("20".to_string()),
+                "KRAALZIBAR_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS" => Some("30".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.rate_limit.max_concurrent_requests, 2000);
+        assert_eq!(config.rate_limit.max_requests_per_tenant_per_second, 200);
+        assert_eq!(config.rate_limit.auth_failure_threshold, 20);
+        assert_eq!(config.rate_limit.auth_failure_window_seconds, 30);
+    }
+
+    #[test]
+    fn rate_limit_config_zero_means_unlimited() {
+        let toml_str = r#"
+[rate_limit]
+max_concurrent_requests = 0
+max_requests_per_tenant_per_second = 0
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.rate_limit.max_concurrent_requests, 0);
+        assert_eq!(config.rate_limit.max_requests_per_tenant_per_second, 0);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rate_limit_config_validates_auth_failure_window() {
+        let mut config = AppConfig::default();
+        config.rate_limit.auth_failure_window_seconds = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("auth_failure_window_seconds")),
+            "expected validation error for zero auth failure window: {result:?}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_config_in_app_config_defaults() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.rate_limit.max_concurrent_requests, 1000);
+        assert_eq!(config.rate_limit.max_requests_per_tenant_per_second, 100);
     }
 
     #[test]

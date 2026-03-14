@@ -13,7 +13,8 @@ use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 const MAX_REQUEST_BODY_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
 use crate::metrics::Metrics;
-use crate::middleware::{AuthState, rest_auth_middleware};
+use crate::middleware::{AuthState, rest_auth_middleware, rest_tenant_rate_limit_middleware};
+use crate::rate_limit::RateLimitState;
 use crate::service::AuthzService;
 
 pub struct AppState<F: StoreFactory> {
@@ -81,7 +82,11 @@ async fn metrics_middleware<F: StoreFactory>(
     response
 }
 
-pub fn create_router<F>(state: AppState<F>, auth_state: AuthState) -> Router
+pub fn create_router<F>(
+    state: AppState<F>,
+    auth_state: AuthState,
+    rate_limit: RateLimitState,
+) -> Router
 where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
@@ -104,6 +109,10 @@ where
         .route("/v1/watch", get(handlers::watch))
         .route("/healthz", get(handlers::healthz))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_SIZE))
+        .layer(middleware::from_fn_with_state(
+            rate_limit,
+            rest_tenant_rate_limit_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             rest_auth_middleware,
