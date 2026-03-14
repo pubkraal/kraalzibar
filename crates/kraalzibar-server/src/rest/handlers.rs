@@ -340,6 +340,12 @@ where
             return e;
         }
 
+        if let Some(ref rel) = update.subject_relation
+            && let Err(e) = validate_identifier("subject_relation", rel)
+        {
+            return e;
+        }
+
         let object = ObjectRef::new(&update.resource_type, &update.resource_id);
         let subject = match &update.subject_relation {
             Some(rel) => SubjectRef::userset(&update.subject_type, &update.subject_id, rel),
@@ -786,6 +792,30 @@ mod tests {
             .await;
 
         response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn write_relationships_rejects_empty_subject_relation() {
+        let server = make_test_server();
+
+        let response = server
+            .post("/v1/relationships/write")
+            .json(&json!({
+                "updates": [{
+                    "operation": "touch",
+                    "resource_type": "document",
+                    "resource_id": "readme",
+                    "relation": "viewer",
+                    "subject_type": "user",
+                    "subject_id": "alice",
+                    "subject_relation": ""
+                }]
+            }))
+            .await;
+
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json();
+        assert!(body["error"].as_str().unwrap().contains("subject_relation"));
     }
 
     #[tokio::test]
