@@ -33,6 +33,7 @@ pub enum CheckError {
 pub struct EngineConfig {
     pub max_depth: usize,
     pub max_concurrent_branches: usize,
+    pub max_lookup_candidates: usize,
 }
 
 impl Default for EngineConfig {
@@ -40,7 +41,20 @@ impl Default for EngineConfig {
         Self {
             max_depth: 6,
             max_concurrent_branches: 10,
+            max_lookup_candidates: 50_000,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_config_default_max_lookup_candidates() {
+        let config = EngineConfig::default();
+
+        assert_eq!(config.max_lookup_candidates, 50_000);
     }
 }
 

@@ -91,6 +91,7 @@ impl std::fmt::Debug for DatabaseConfig {
 pub struct EngineConfigValues {
     pub max_depth: usize,
     pub max_concurrent_branches: usize,
+    pub max_lookup_candidates: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -176,6 +177,7 @@ impl Default for EngineConfigValues {
         Self {
             max_depth: 6,
             max_concurrent_branches: 10,
+            max_lookup_candidates: 50_000,
         }
     }
 }
@@ -281,6 +283,11 @@ impl AppConfig {
         {
             self.engine.max_depth = n;
         }
+        if let Some(v) = env("KRAALZIBAR_ENGINE_MAX_LOOKUP_CANDIDATES")
+            && let Ok(n) = v.parse()
+        {
+            self.engine.max_lookup_candidates = n;
+        }
         if let Some(v) = env("KRAALZIBAR_CACHE_SCHEMA_CAPACITY")
             && let Ok(n) = v.parse()
         {
@@ -381,6 +388,11 @@ impl AppConfig {
                 "engine.max_concurrent_branches must be non-zero".to_string(),
             ));
         }
+        if self.engine.max_lookup_candidates == 0 {
+            return Err(ConfigError::Validation(
+                "engine.max_lookup_candidates must be non-zero".to_string(),
+            ));
+        }
         if self.schema_limits.max_types == 0 {
             return Err(ConfigError::Validation(
                 "schema_limits.max_types must be non-zero".to_string(),
@@ -440,6 +452,7 @@ impl AppConfig {
         kraalzibar_core::engine::EngineConfig {
             max_depth: self.engine.max_depth,
             max_concurrent_branches: self.engine.max_concurrent_branches,
+            max_lookup_candidates: self.engine.max_lookup_candidates,
         }
     }
 
@@ -943,5 +956,49 @@ key_path = "/etc/kraalzibar/tls/server.key"
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("tls")),
             "expected validation error for partial TLS config: {result:?}"
         );
+    }
+
+    // --- max_lookup_candidates config tests ---
+
+    #[test]
+    fn default_config_has_max_lookup_candidates() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.engine.max_lookup_candidates, 50_000);
+    }
+
+    #[test]
+    fn validation_rejects_zero_max_lookup_candidates() {
+        let mut config = AppConfig::default();
+        config.engine.max_lookup_candidates = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("max_lookup_candidates"))
+        );
+    }
+
+    #[test]
+    fn max_lookup_candidates_env_override() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_ENGINE_MAX_LOOKUP_CANDIDATES" => Some("25000".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.engine.max_lookup_candidates, 25_000);
+    }
+
+    #[test]
+    fn to_engine_config_includes_max_lookup_candidates() {
+        let mut config = AppConfig::default();
+        config.engine.max_lookup_candidates = 10_000;
+
+        let engine_config = config.to_engine_config();
+
+        assert_eq!(engine_config.max_lookup_candidates, 10_000);
     }
 }

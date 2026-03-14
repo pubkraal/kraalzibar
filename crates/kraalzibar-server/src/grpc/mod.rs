@@ -44,6 +44,7 @@ fn api_error_to_status(err: crate::error::ApiError) -> Status {
         ApiError::Parse(_) | ApiError::Validation(_) => Status::invalid_argument(err.to_string()),
         ApiError::BreakingChanges(_) => Status::failed_precondition(err.to_string()),
         ApiError::SchemaNotFound => Status::not_found(err.to_string()),
+        ApiError::TooManyCandidates { .. } => Status::resource_exhausted(err.to_string()),
     }
 }
 
@@ -92,6 +93,19 @@ mod tests {
         assert!(
             !status.message().contains("db connection"),
             "internal details must not leak to client"
+        );
+    }
+
+    #[test]
+    fn too_many_candidates_maps_to_resource_exhausted() {
+        let err = ApiError::TooManyCandidates { limit: 50_000 };
+        let status = api_error_to_status(err);
+
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert!(
+            status.message().contains("50000"),
+            "expected limit in message, got: {}",
+            status.message()
         );
     }
 }

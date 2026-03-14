@@ -21,6 +21,11 @@ pub enum ApiError {
 
     #[error("schema not found")]
     SchemaNotFound,
+
+    #[error(
+        "lookup candidate set exceeds maximum of {limit}; narrow your query or increase the limit"
+    )]
+    TooManyCandidates { limit: usize },
 }
 
 fn format_validation_errors(errors: &[ValidationError]) -> String {
@@ -92,5 +97,17 @@ mod tests {
     fn api_error_schema_not_found() {
         let api_err = ApiError::SchemaNotFound;
         assert!(api_err.to_string().contains("schema not found"));
+    }
+
+    #[test]
+    fn api_error_too_many_candidates() {
+        let api_err = ApiError::TooManyCandidates { limit: 50_000 };
+        let msg = api_err.to_string();
+
+        assert!(msg.contains("50000"), "should contain limit: {msg}");
+        assert!(
+            msg.contains("narrow your query"),
+            "should contain guidance: {msg}"
+        );
     }
 }
