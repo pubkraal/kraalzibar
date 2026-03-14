@@ -389,17 +389,44 @@ where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
 {
-    let filter = req
-        .filter
-        .map(|f| TupleFilter {
-            object_type: f.resource_type,
-            object_id: f.resource_id,
-            relation: f.relation,
-            subject_type: f.subject_type,
-            subject_id: f.subject_id,
-            subject_relation: None,
-        })
-        .unwrap_or_default();
+    let filter = match req.filter {
+        Some(f) => {
+            if let Some(ref v) = f.resource_type
+                && let Err(e) = validate_identifier("resource_type", v)
+            {
+                return e;
+            }
+            if let Some(ref v) = f.resource_id
+                && let Err(e) = validate_identifier("resource_id", v)
+            {
+                return e;
+            }
+            if let Some(ref v) = f.relation
+                && let Err(e) = validate_identifier("relation", v)
+            {
+                return e;
+            }
+            if let Some(ref v) = f.subject_type
+                && let Err(e) = validate_identifier("subject_type", v)
+            {
+                return e;
+            }
+            if let Some(ref v) = f.subject_id
+                && let Err(e) = validate_identifier("subject_id", v)
+            {
+                return e;
+            }
+            TupleFilter {
+                object_type: f.resource_type,
+                object_id: f.resource_id,
+                relation: f.relation,
+                subject_type: f.subject_type,
+                subject_id: f.subject_id,
+                subject_relation: None,
+            }
+        }
+        None => TupleFilter::default(),
+    };
 
     let consistency = match resolve_consistency(req.consistency.as_ref()) {
         Ok(c) => c,
@@ -994,6 +1021,25 @@ mod tests {
         assert!(
             !msg.contains("db connection"),
             "internal details must not leak to client"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_relationships_rejects_empty_filter_field() {
+        let server = make_test_server();
+
+        let response = server
+            .post("/v1/relationships/read")
+            .json(&json!({
+                "filter": {"resource_type": ""}
+            }))
+            .await;
+
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["error"].as_str().unwrap().contains("resource_type"),
+            "expected error about resource_type, got: {body}"
         );
     }
 
