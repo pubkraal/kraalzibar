@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use axum::response::IntoResponse;
 use clap::Parser;
 use kraalzibar_server::api_key_repository::ApiKeyRepository;
 use kraalzibar_server::auth;
@@ -345,21 +344,9 @@ where
             "/metrics",
             axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
         )
-        .layer(axum::middleware::from_fn(
-            move |req, next: axum::middleware::Next| {
-                let timeout = request_timeout;
-                async move {
-                    match tokio::time::timeout(timeout, next.run(req)).await {
-                        Ok(response) => response,
-                        Err(_) => (
-                            axum::http::StatusCode::REQUEST_TIMEOUT,
-                            axum::Json(serde_json::json!({ "error": "request timeout" })),
-                        )
-                            .into_response(),
-                    }
-                }
-            },
-        ));
+        .layer(axum::middleware::from_fn(rest::timeout_middleware(
+            request_timeout,
+        )));
 
     let grpc_router = tonic::transport::Server::builder()
         .timeout(request_timeout)

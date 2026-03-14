@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::middleware;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 
@@ -79,6 +79,28 @@ async fn metrics_middleware<F: StoreFactory>(
     }
 
     response
+}
+
+pub fn timeout_middleware(
+    timeout: std::time::Duration,
+) -> impl Fn(
+    axum::http::Request<axum::body::Body>,
+    middleware::Next,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
++ Clone
++ Send {
+    move |req, next: middleware::Next| {
+        Box::pin(async move {
+            match tokio::time::timeout(timeout, next.run(req)).await {
+                Ok(response) => response,
+                Err(_) => (
+                    axum::http::StatusCode::REQUEST_TIMEOUT,
+                    axum::Json(serde_json::json!({ "error": "request timeout" })),
+                )
+                    .into_response(),
+            }
+        })
+    }
 }
 
 pub fn create_router<F>(state: AppState<F>, auth_state: AuthState) -> Router
