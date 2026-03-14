@@ -88,6 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::PurgeRelationships { tenant_name, yes }) => {
             run_purge_relationships(&config, &tenant_name, yes).await
         }
+        Some(Command::RevokeApiKey { key_id }) => run_revoke_api_key(&config, &key_id).await,
+        Some(Command::ListApiKeys { tenant_name }) => {
+            run_list_api_keys(&config, &tenant_name).await
+        }
+        Some(Command::RotateApiKey { key_id }) => run_rotate_api_key(&config, &key_id).await,
         Some(Command::Serve) | None => run_serve(config).await,
     }
 }
@@ -194,6 +199,130 @@ async fn run_purge_relationships(
         "Purged {deleted} relationship(s) for tenant '{tenant_name}'. Transaction sequence reset.",
     );
 
+    Ok(())
+}
+
+async fn run_revoke_api_key(
+    config: &AppConfig,
+    key_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let repo = ApiKeyRepository::new(pool);
+    let revoked = repo.revoke_by_key_id(key_id).await?;
+
+    if revoked {
+        println!("API key '{key_id}' has been revoked.");
+    } else {
+        eprintln!("Error: API key '{key_id}' not found or already revoked");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn run_list_api_keys(
+    config: &AppConfig,
+    tenant_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let row = sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM tenants WHERE name = $1")
+        .bind(tenant_name)
+        .fetch_optional(&pool)
+        .await?;
+
+    let tenant_uuid = match row {
+        Some((id,)) => id,
+        None => {
+            eprintln!("Error: tenant '{tenant_name}' not found");
+            std::process::exit(1);
+        }
+    };
+
+    let repo = ApiKeyRepository::new(pool);
+    let keys = repo.list_for_tenant(&TenantId::new(tenant_uuid)).await?;
+
+    if keys.is_empty() {
+        println!("No API keys found for tenant '{tenant_name}'.");
+    } else {
+        println!("API keys for tenant '{tenant_name}':");
+        println!(
+            "{:<12} {:<24} {:<24} {:<24}",
+            "KEY_ID", "CREATED_AT", "REVOKED_AT", "EXPIRES_AT"
+        );
+        for key in &keys {
+            let revoked = key
+                .revoked_at
+                .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let expires = key
+                .expires_at
+                .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "{:<12} {:<24} {:<24} {:<24}",
+                key.key_id,
+                key.created_at.format("%Y-%m-%d %H:%M:%S"),
+                revoked,
+                expires,
+            );
+        }
+        println!("\nTotal: {} key(s)", keys.len());
+    }
+    Ok(())
+}
+
+async fn run_rotate_api_key(
+    config: &AppConfig,
+    old_key_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    config.database.require_configured()?;
+    let pool = sqlx::PgPool::connect(&config.database.url).await?;
+    kraalzibar_storage::postgres::migrations::run_shared_migrations(&pool).await?;
+
+    let old_row = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT tenant_id FROM api_keys WHERE key_id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
+    )
+    .bind(old_key_id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let tenant_uuid = match old_row {
+        Some((id,)) => id,
+        None => {
+            eprintln!("Error: API key '{old_key_id}' not found, already revoked, or expired");
+            std::process::exit(1);
+        }
+    };
+
+    let (full_key, secret) = auth::generate_api_key();
+    let (new_key_id, _) = auth::parse_api_key(&full_key).expect("generated key should parse");
+    let key_hash = auth::hash_secret(&secret)?;
+
+    let tenant_id = TenantId::new(tenant_uuid);
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO api_keys (tenant_id, key_id, key_hash) VALUES ((SELECT id FROM tenants WHERE id = $1), $2, $3)")
+        .bind(tenant_id.as_uuid())
+        .bind(new_key_id)
+        .bind(&key_hash)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE key_id = $1 AND revoked_at IS NULL")
+        .bind(old_key_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    println!("API key rotated successfully");
+    println!("  Old key '{old_key_id}' has been revoked");
+    println!("  New API Key: {full_key}");
+    println!();
+    println!("Store this key securely — it will not be shown again.");
     Ok(())
 }
 

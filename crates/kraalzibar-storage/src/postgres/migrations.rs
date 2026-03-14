@@ -43,6 +43,14 @@ pub async fn run_shared_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        r#"
+        ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

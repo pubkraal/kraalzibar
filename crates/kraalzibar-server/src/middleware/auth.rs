@@ -100,6 +100,9 @@ pub async fn rest_auth_middleware(
         Err(auth::AuthError::RevokedKey) => {
             error_json(StatusCode::UNAUTHORIZED, "api key has been revoked")
         }
+        Err(auth::AuthError::ExpiredKey) => {
+            error_json(StatusCode::UNAUTHORIZED, "api key has expired")
+        }
         Err(_) => error_json(StatusCode::UNAUTHORIZED, "invalid api key"),
     }
 }
@@ -150,6 +153,9 @@ pub fn grpc_auth_interceptor(
         }
         Err(auth::AuthError::RevokedKey) => {
             Err(tonic::Status::unauthenticated("api key has been revoked"))
+        }
+        Err(auth::AuthError::ExpiredKey) => {
+            Err(tonic::Status::unauthenticated("api key has expired"))
         }
         Err(_) => Err(tonic::Status::unauthenticated("invalid api key")),
     }
