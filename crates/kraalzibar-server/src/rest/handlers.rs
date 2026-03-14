@@ -88,7 +88,11 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         | ApiError::SchemaNotFound => error_response(StatusCode::NOT_FOUND, &err.to_string()),
         ApiError::Check(CheckError::MaxDepthExceeded(_))
         | ApiError::Check(CheckError::TooManyResults(_, _)) => {
-            error_response(StatusCode::UNPROCESSABLE_ENTITY, &err.to_string())
+            tracing::warn!(error = %err, "resource exhausted");
+            error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "too many results; narrow your query",
+            )
         }
         ApiError::Parse(_) | ApiError::Validation(_) => {
             error_response(StatusCode::BAD_REQUEST, &err.to_string())
@@ -977,6 +981,10 @@ mod tests {
         assert!(
             msg.contains("too many results"),
             "expected 'too many results' in message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("10000"),
+            "internal limit must not leak to client, got: {msg}"
         );
     }
 

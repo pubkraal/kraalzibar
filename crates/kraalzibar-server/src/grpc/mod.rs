@@ -31,7 +31,8 @@ fn api_error_to_status(err: crate::error::ApiError) -> Status {
         }
         ApiError::Check(CheckError::MaxDepthExceeded(_))
         | ApiError::Check(CheckError::TooManyResults(_, _)) => {
-            Status::resource_exhausted(err.to_string())
+            tracing::warn!(error = %err, "resource exhausted");
+            Status::resource_exhausted("too many results; narrow your query")
         }
         ApiError::Storage(kraalzibar_storage::StorageError::EmptyDeleteFilter)
         | ApiError::Storage(kraalzibar_storage::StorageError::SnapshotAhead { .. }) => {
@@ -94,6 +95,11 @@ mod tests {
         assert!(
             status.message().contains("too many results"),
             "expected 'too many results' in message, got: {}",
+            status.message()
+        );
+        assert!(
+            !status.message().contains("10000"),
+            "internal limit must not leak to client, got: {}",
             status.message()
         );
     }
