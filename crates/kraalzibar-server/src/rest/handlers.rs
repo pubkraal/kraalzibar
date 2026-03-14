@@ -528,7 +528,7 @@ mod tests {
             service,
             metrics: Arc::clone(&metrics),
         };
-        let app = create_router(state, AuthState::dev_mode());
+        let app = create_router(state, AuthState::dev_mode(), false);
         (TestServer::new(app).unwrap(), metrics)
     }
 
@@ -1034,7 +1034,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_include_security_headers() {
+    async fn responses_include_security_headers_without_hsts_when_tls_disabled() {
         let server = make_test_server();
         let response = server.get("/healthz").await;
         response.assert_status_ok();
@@ -1046,6 +1046,33 @@ mod tests {
             response.header("content-security-policy"),
             "default-src 'none'",
         );
+        assert!(
+            response
+                .headers()
+                .get("strict-transport-security")
+                .is_none(),
+            "HSTS must not be sent over plain HTTP (RFC 6797 section 7.2)"
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_include_hsts_when_tls_enabled() {
+        let factory = Arc::new(InMemoryStoreFactory::new());
+        let service = Arc::new(AuthzService::new(
+            factory,
+            EngineConfig::default(),
+            SchemaLimits::default(),
+        ));
+        let metrics = Arc::new(crate::metrics::Metrics::new());
+        let state = AppState {
+            service,
+            metrics: Arc::clone(&metrics),
+        };
+        let app = create_router(state, AuthState::dev_mode(), true);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/healthz").await;
+        response.assert_status_ok();
         assert_eq!(
             response.header("strict-transport-security"),
             "max-age=63072000; includeSubDomains",

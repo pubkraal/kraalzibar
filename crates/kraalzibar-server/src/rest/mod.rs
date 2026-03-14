@@ -83,6 +83,7 @@ async fn metrics_middleware<F: StoreFactory>(
 }
 
 async fn security_headers_middleware(
+    axum::extract::State(tls_enabled): axum::extract::State<bool>,
     request: axum::http::Request<axum::body::Body>,
     next: middleware::Next,
 ) -> Response {
@@ -98,15 +99,17 @@ async fn security_headers_middleware(
         "content-security-policy",
         HeaderValue::from_static("default-src 'none'"),
     );
-    headers.insert(
-        "strict-transport-security",
-        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
-    );
+    if tls_enabled {
+        headers.insert(
+            "strict-transport-security",
+            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+        );
+    }
 
     response
 }
 
-pub fn create_router<F>(state: AppState<F>, auth_state: AuthState) -> Router
+pub fn create_router<F>(state: AppState<F>, auth_state: AuthState, tls_enabled: bool) -> Router
 where
     F: StoreFactory + 'static,
     F::Store: RelationshipStore + SchemaStore,
@@ -137,6 +140,9 @@ where
             state.clone(),
             metrics_middleware,
         ))
-        .layer(middleware::from_fn(security_headers_middleware))
+        .layer(middleware::from_fn_with_state(
+            tls_enabled,
+            security_headers_middleware,
+        ))
         .with_state(state)
 }
