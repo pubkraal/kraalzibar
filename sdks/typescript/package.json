@@ -18,5 +18,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.4.0",
     "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "rollup": ">=4.59.0"
   }
 }
