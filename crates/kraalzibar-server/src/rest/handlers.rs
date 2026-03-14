@@ -16,12 +16,11 @@ use crate::service::{
     CheckPermissionInput, Consistency, ExpandPermissionInput, LookupResourcesInput,
     LookupSubjectsInput,
 };
+use crate::validation::MAX_BATCH_SIZE;
 
 use super::AppState;
 use super::types::*;
 
-const MAX_BATCH_SIZE: usize = 1000;
-const MAX_IDENTIFIER_LENGTH: usize = 256;
 const DEFAULT_READ_LIMIT: usize = 1000;
 
 type ApiResult = (StatusCode, Json<serde_json::Value>);
@@ -44,19 +43,8 @@ fn error_response(status: StatusCode, msg: &str) -> ApiResult {
 }
 
 fn validate_identifier(field: &str, value: &str) -> Result<(), ApiResult> {
-    if value.is_empty() {
-        return Err(error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("{field} must not be empty"),
-        ));
-    }
-    if value.len() > MAX_IDENTIFIER_LENGTH {
-        return Err(error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("{field} exceeds maximum length of {MAX_IDENTIFIER_LENGTH}"),
-        ));
-    }
-    Ok(())
+    crate::validation::validate_identifier(field, value)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))
 }
 
 fn resolve_consistency(c: Option<&ConsistencyRequest>) -> Result<Consistency, ApiResult> {

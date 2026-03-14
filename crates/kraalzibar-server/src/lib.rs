@@ -14,3 +14,4 @@ pub mod rest;
 pub mod service;
 pub mod telemetry;
 pub mod tls;
+pub mod validation;
