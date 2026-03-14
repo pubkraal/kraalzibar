@@ -86,8 +86,13 @@ fn api_error_to_response(err: ApiError) -> ApiResult {
         | ApiError::Check(CheckError::PermissionNotFound { .. })
         | ApiError::Check(CheckError::RelationNotFound { .. })
         | ApiError::SchemaNotFound => error_response(StatusCode::NOT_FOUND, &err.to_string()),
-        ApiError::Check(CheckError::MaxDepthExceeded(_)) => {
-            error_response(StatusCode::UNPROCESSABLE_ENTITY, &err.to_string())
+        ApiError::Check(CheckError::MaxDepthExceeded(_))
+        | ApiError::Check(CheckError::TooManyResults(_, _)) => {
+            tracing::warn!(error = %err, "resource exhausted");
+            error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "too many results; narrow your query",
+            )
         }
         ApiError::Parse(_) | ApiError::Validation(_) => {
             error_response(StatusCode::BAD_REQUEST, &err.to_string())
@@ -961,6 +966,25 @@ mod tests {
         assert!(
             body.get("read_at").is_none(),
             "read_relationships without consistency should omit read_at: {body}"
+        );
+    }
+
+    #[test]
+    fn too_many_results_returns_422() {
+        let err = ApiError::Check(kraalzibar_core::engine::CheckError::TooManyResults(
+            10001, 10000,
+        ));
+        let (status, body) = api_error_to_response(err);
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let msg = body.0["error"].as_str().unwrap();
+        assert!(
+            msg.contains("too many results"),
+            "expected 'too many results' in message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("10000"),
+            "internal limit must not leak to client, got: {msg}"
         );
     }
 
