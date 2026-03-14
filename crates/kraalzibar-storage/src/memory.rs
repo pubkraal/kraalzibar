@@ -8,6 +8,7 @@ use kraalzibar_core::tuple::{
 use crate::traits::{RelationshipStore, SchemaStore, StorageError, StoreFactory};
 
 const ACTIVE_TX_ID: u64 = u64::MAX;
+const DEFAULT_GC_THRESHOLD: usize = 100_000;
 
 #[derive(Debug, Clone)]
 struct StoredTuple {
@@ -61,6 +62,7 @@ struct InnerState {
     current_tx: u64,
     tuples: Vec<StoredTuple>,
     schema: Option<String>,
+    gc_threshold: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,7 @@ impl Default for InMemoryStore {
                 current_tx: 0,
                 tuples: Vec::new(),
                 schema: None,
+                gc_threshold: DEFAULT_GC_THRESHOLD,
             })),
         }
     }
@@ -83,6 +86,17 @@ impl Default for InMemoryStore {
 impl InMemoryStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_gc_threshold(threshold: usize) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(InnerState {
+                current_tx: 0,
+                tuples: Vec::new(),
+                schema: None,
+                gc_threshold: threshold,
+            })),
+        }
     }
 }
 
@@ -148,6 +162,16 @@ impl RelationshipStore for InMemoryStore {
                 created_tx_id: tx_id,
                 deleted_tx_id: ACTIVE_TX_ID,
             });
+        }
+
+        if state.tuples.len() > state.gc_threshold {
+            // Only compact tuples deleted strictly before this transaction.
+            // Tuples deleted at tx_id must remain so that snapshots issued
+            // before this write (snapshot < tx_id) can still see them via
+            // visible_at(snapshot): created <= snapshot && deleted > snapshot.
+            state
+                .tuples
+                .retain(|t| t.is_active() || t.deleted_tx_id >= tx_id);
         }
 
         Ok(SnapshotToken::new(tx_id))
@@ -941,6 +965,176 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(StorageError::SnapshotAhead { .. })));
+    }
+
+    #[tokio::test]
+    async fn auto_gc_compacts_old_deleted_tuples_when_threshold_exceeded() {
+        let store = InMemoryStore::with_gc_threshold(50);
+
+        // Write 50 tuples (tx 1..50)
+        for i in 0..50 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+
+        // Delete all docs (tx 51) — still above threshold so GC fires
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        let delete_snap = store.write(&[], &[delete_filter]).await.unwrap();
+
+        // Write a few more to push past threshold again and trigger another GC
+        for i in 50..55 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+
+        let latest = store
+            .write(
+                &[make_write("doc", "final", "viewer", direct_user("a"))],
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // At the latest snapshot, only the 6 new tuples should be visible
+        let read_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        let current_results = store.read(&read_filter, Some(latest), None).await.unwrap();
+        assert_eq!(
+            current_results.len(),
+            6,
+            "only 6 active tuples should be visible at latest snapshot"
+        );
+
+        // At the delete snapshot, the deleted tuples are still gone (deleted_tx == snapshot)
+        let at_delete = store
+            .read(&read_filter, Some(delete_snap), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            at_delete.len(),
+            0,
+            "no tuples visible at the delete snapshot itself"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_gc_preserves_recently_deleted_tuples_for_snapshot_reads() {
+        let store = InMemoryStore::with_gc_threshold(50);
+
+        // Write 50 tuples (tx 1..50)
+        for i in 0..50 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+        let pre_delete_snap = SnapshotToken::new(50);
+
+        // Delete all docs at tx 51 — this triggers GC (51 tuples > threshold 50)
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        store.write(&[], &[delete_filter]).await.unwrap();
+
+        // Reading at the pre-delete snapshot should still see the tuples
+        // because GC retains tuples deleted at the current tx
+        let read_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        let results = store
+            .read(&read_filter, Some(pre_delete_snap), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            50,
+            "tuples deleted in the GC-triggering tx must remain visible at prior snapshots"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_gc_does_not_fire_below_threshold() {
+        let store = InMemoryStore::with_gc_threshold(100);
+
+        for i in 0..10 {
+            store
+                .write(
+                    &[make_write(
+                        "doc",
+                        &i.to_string(),
+                        "viewer",
+                        direct_user("a"),
+                    )],
+                    &[],
+                )
+                .await
+                .unwrap();
+        }
+        let pre_delete_snap = SnapshotToken::new(10);
+
+        let delete_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        store.write(&[], &[delete_filter]).await.unwrap();
+
+        let latest = store
+            .write(&[make_write("doc", "new", "viewer", direct_user("a"))], &[])
+            .await
+            .unwrap();
+
+        // Below threshold: deleted tuples not compacted, so prior snapshot still works
+        let read_filter = TupleFilter {
+            object_type: Some("doc".to_string()),
+            ..Default::default()
+        };
+        let at_pre_delete = store
+            .read(&read_filter, Some(pre_delete_snap), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            at_pre_delete.len(),
+            10,
+            "deleted tuples should remain readable at prior snapshot when below threshold"
+        );
+
+        let at_latest = store.read(&read_filter, Some(latest), None).await.unwrap();
+        assert_eq!(at_latest.len(), 1, "only 1 active tuple at latest snapshot");
     }
 
     #[tokio::test]
