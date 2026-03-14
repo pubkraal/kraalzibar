@@ -67,7 +67,7 @@ pub fn verify_secret(secret: &str, hash: &str) -> Result<bool, AuthError> {
 
 pub fn generate_api_key() -> (String, String) {
     use rand::Rng;
-    let key_id: String = (0..8)
+    let key_id: String = (0..16)
         .map(|_| {
             let idx = rand::thread_rng().gen_range(0..36);
             if idx < 10 {
@@ -167,7 +167,12 @@ mod tests {
     fn generate_key_has_correct_format() {
         let (full_key, _secret) = generate_api_key();
         assert!(full_key.starts_with("kraalzibar_"));
-        let (_key_id, _secret) = parse_api_key(&full_key).unwrap();
+        let (key_id, _secret) = parse_api_key(&full_key).unwrap();
+        assert_eq!(
+            key_id.len(),
+            16,
+            "key_id must be 16 chars for sufficient entropy"
+        );
     }
 
     #[test]
