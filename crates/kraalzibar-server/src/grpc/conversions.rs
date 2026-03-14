@@ -84,17 +84,14 @@ pub fn proto_consistency_to_domain(
 
 pub fn snapshot_to_zed_token(snapshot: Option<SnapshotToken>) -> Option<v1::ZedToken> {
     snapshot.map(|s| v1::ZedToken {
-        token: s.value().to_string(),
+        token: crate::token::encode_snapshot(s),
     })
 }
 
 #[allow(clippy::result_large_err)]
 fn zed_token_to_snapshot(token: &v1::ZedToken) -> Result<SnapshotToken, tonic::Status> {
-    let value: u64 = token
-        .token
-        .parse()
-        .map_err(|_| tonic::Status::invalid_argument("invalid snapshot token format"))?;
-    Ok(SnapshotToken::new(value))
+    crate::token::decode_snapshot(&token.token)
+        .map_err(|_| tonic::Status::invalid_argument("invalid snapshot token format"))
 }
 
 pub fn domain_expand_tree_to_proto(
@@ -244,9 +241,10 @@ mod tests {
 
     #[test]
     fn convert_consistency_at_least_as_fresh() {
+        let encoded = crate::token::encode_snapshot(SnapshotToken::new(42));
         let proto = v1::Consistency {
             requirement: Some(v1::consistency::Requirement::AtLeastAsFresh(v1::ZedToken {
-                token: "42".to_string(),
+                token: encoded,
             })),
         };
         let domain = proto_consistency_to_domain(Some(&proto)).unwrap();
@@ -273,7 +271,10 @@ mod tests {
     #[test]
     fn convert_snapshot_to_zed_token() {
         let token = snapshot_to_zed_token(Some(SnapshotToken::new(99)));
-        assert_eq!(token.unwrap().token, "99");
+        let encoded = token.unwrap().token;
+        assert_ne!(encoded, "99", "token must not be the raw numeric value");
+        let decoded = crate::token::decode_snapshot(&encoded).unwrap();
+        assert_eq!(decoded, SnapshotToken::new(99));
 
         let none = snapshot_to_zed_token(None);
         assert!(none.is_none());
