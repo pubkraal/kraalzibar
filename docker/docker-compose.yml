@@ -1,10 +1,11 @@
+# WARNING: Development environment only. Do not use in production.
 services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_DB: kraalzibar
       POSTGRES_USER: kraalzibar
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kraalzibar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -23,7 +24,7 @@ services:
       - "50051:50051"
       - "8080:8080"
     environment:
-      KRAALZIBAR_DATABASE_URL: "postgresql://kraalzibar:kraalzibar@postgres:5432/kraalzibar"
+      KRAALZIBAR_DATABASE_URL: "postgresql://kraalzibar:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/kraalzibar"
       KRAALZIBAR_LOG_FORMAT: "json"
       KRAALZIBAR_LOG_LEVEL: "info"
       KRAALZIBAR_TRACING_ENABLED: "true"
@@ -68,8 +69,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
