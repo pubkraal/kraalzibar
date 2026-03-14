@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     pub grpc: GrpcConfig,
@@ -13,6 +13,24 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     pub tracing: TracingConfig,
     pub tls: TlsConfig,
+    pub request_timeout_seconds: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            grpc: GrpcConfig::default(),
+            rest: RestConfig::default(),
+            database: DatabaseConfig::default(),
+            engine: EngineConfigValues::default(),
+            schema_limits: SchemaLimitsConfig::default(),
+            log: LogConfig::default(),
+            cache: CacheConfig::default(),
+            tracing: TracingConfig::default(),
+            tls: TlsConfig::default(),
+            request_timeout_seconds: 30,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -325,6 +343,11 @@ impl AppConfig {
         {
             self.tracing.sample_rate = rate;
         }
+        if let Some(v) = env("KRAALZIBAR_REQUEST_TIMEOUT")
+            && let Ok(n) = v.parse()
+        {
+            self.request_timeout_seconds = n;
+        }
         if let Some(v) = env("KRAALZIBAR_TLS_CERT_PATH") {
             self.tls.cert_path = v;
         }
@@ -424,6 +447,11 @@ impl AppConfig {
         if self.tracing.enabled && self.tracing.otlp_endpoint.is_empty() {
             return Err(ConfigError::Validation(
                 "tracing.otlp_endpoint must not be empty when tracing is enabled".to_string(),
+            ));
+        }
+        if self.request_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "request_timeout_seconds must be non-zero".to_string(),
             ));
         }
         let has_cert = !self.tls.cert_path.is_empty();
@@ -930,6 +958,49 @@ key_path = "/etc/kraalzibar/tls/server.key"
         assert!(
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("tls")),
             "expected validation error for partial TLS config: {result:?}"
+        );
+    }
+
+    #[test]
+    fn request_timeout_defaults_to_30() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.request_timeout_seconds, 30);
+    }
+
+    #[test]
+    fn request_timeout_parsed_from_toml() {
+        let toml_str = r#"
+request_timeout_seconds = 10
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.request_timeout_seconds, 10);
+    }
+
+    #[test]
+    fn request_timeout_env_override() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_REQUEST_TIMEOUT" => Some("15".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+
+        assert_eq!(config.request_timeout_seconds, 15);
+    }
+
+    #[test]
+    fn request_timeout_rejects_zero() {
+        let mut config = AppConfig::default();
+        config.request_timeout_seconds = 0;
+
+        let result = config.validate();
+        assert!(
+            matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("request_timeout_seconds")),
+            "expected validation error for zero timeout: {result:?}"
         );
     }
 
