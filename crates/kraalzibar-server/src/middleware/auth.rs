@@ -9,10 +9,23 @@ use kraalzibar_core::tuple::TenantId;
 use crate::api_key_repository::ApiKeyRepository;
 use crate::auth;
 
+const AUTH_CACHE_TTL_SECONDS: u64 = 5;
+const AUTH_CACHE_CAPACITY: u64 = 10_000;
+const MAX_CONCURRENT_ARGON2: usize = 4;
+
 #[derive(Clone)]
 pub struct AuthState {
     repository: Option<Arc<ApiKeyRepository>>,
     dev_tenant: TenantId,
+    auth_cache: moka::sync::Cache<String, TenantId>,
+    argon2_semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+fn build_auth_cache() -> moka::sync::Cache<String, TenantId> {
+    moka::sync::Cache::builder()
+        .time_to_live(std::time::Duration::from_secs(AUTH_CACHE_TTL_SECONDS))
+        .max_capacity(AUTH_CACHE_CAPACITY)
+        .build()
 }
 
 impl AuthState {
@@ -20,6 +33,8 @@ impl AuthState {
         Self {
             repository: None,
             dev_tenant: TenantId::new(uuid::Uuid::nil()),
+            auth_cache: build_auth_cache(),
+            argon2_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ARGON2)),
         }
     }
 
@@ -27,6 +42,8 @@ impl AuthState {
         Self {
             repository: Some(repository),
             dev_tenant: TenantId::new(uuid::Uuid::nil()),
+            auth_cache: build_auth_cache(),
+            argon2_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ARGON2)),
         }
     }
 
@@ -84,16 +101,30 @@ pub async fn rest_auth_middleware(
         }
     };
 
+    // Check auth cache — avoids expensive argon2 for recently verified keys
+    if let Some(tenant_id) = auth_state.auth_cache.get(raw_key) {
+        request.extensions_mut().insert(tenant_id);
+
+        return next.run(request).await;
+    }
+
     let lookup_result = match repo.lookup_by_key_id(key_id).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "api key lookup failed");
+
             return error_json(StatusCode::INTERNAL_SERVER_ERROR, "internal server error");
         }
     };
 
+    // Acquire semaphore to bound concurrent argon2 operations
+    let _permit = auth_state.argon2_semaphore.acquire().await.unwrap();
+
     match auth::authenticate(raw_key, |_| lookup_result) {
         Ok(ctx) => {
+            auth_state
+                .auth_cache
+                .insert(raw_key.to_string(), ctx.tenant_id.clone());
             request.extensions_mut().insert(ctx.tenant_id);
             next.run(request).await
         }
@@ -129,11 +160,18 @@ pub fn grpc_auth_interceptor(
     let (key_id, _) = auth::parse_api_key(raw_key)
         .map_err(|_| tonic::Status::unauthenticated("invalid api key format"))?;
 
+    // Check auth cache — avoids expensive argon2 for recently verified keys
+    if let Some(tenant_id) = auth_state.auth_cache.get(raw_key) {
+        request.extensions_mut().insert(tenant_id);
+
+        return Ok(request);
+    }
+
     let repo = auth_state.repository.as_ref().unwrap();
 
-    // The interceptor is sync but the DB lookup is async. Use block_in_place
-    // to bridge safely — this works on tokio's multi-threaded runtime (which
-    // the server always uses). The lookup is a fast indexed query.
+    // The interceptor is sync but the DB lookup and semaphore acquire are
+    // async. Use block_in_place to bridge safely — this works on tokio's
+    // multi-threaded runtime (which the server always uses).
     let raw_key = raw_key.to_string();
     let lookup_result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(repo.lookup_by_key_id(key_id))
@@ -143,8 +181,17 @@ pub fn grpc_auth_interceptor(
         tonic::Status::internal("internal server error")
     })?;
 
+    // Acquire semaphore to bound concurrent argon2 operations
+    let _permit = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(auth_state.argon2_semaphore.acquire())
+    })
+    .map_err(|_| tonic::Status::internal("internal server error"))?;
+
     match auth::authenticate(&raw_key, |_| lookup_result) {
         Ok(ctx) => {
+            auth_state
+                .auth_cache
+                .insert(raw_key.clone(), ctx.tenant_id.clone());
             request.extensions_mut().insert(ctx.tenant_id);
             Ok(request)
         }
@@ -352,6 +399,30 @@ mod tests {
             status.code(),
             status.message()
         );
+    }
+
+    #[test]
+    fn auth_state_has_cache_and_semaphore() {
+        let auth = AuthState::dev_mode();
+        // Cache starts empty
+        assert_eq!(auth.auth_cache.entry_count(), 0);
+        // Semaphore has the expected number of permits
+        assert_eq!(
+            auth.argon2_semaphore.available_permits(),
+            MAX_CONCURRENT_ARGON2
+        );
+    }
+
+    #[test]
+    fn auth_cache_stores_and_retrieves_tenant_id() {
+        let auth = AuthState::dev_mode();
+        let tenant_id = TenantId::new(uuid::Uuid::new_v4());
+        let key = "kraalzibar_test_secret".to_string();
+
+        auth.auth_cache.insert(key.clone(), tenant_id.clone());
+        let cached = auth.auth_cache.get(&key);
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap(), tenant_id);
     }
 
     fn make_auth_server(auth: AuthState) -> TestServer {
