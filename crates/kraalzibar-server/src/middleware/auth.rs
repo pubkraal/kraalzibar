@@ -6,6 +6,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use kraalzibar_core::tuple::TenantId;
 
+use tonic::metadata::MetadataValue;
+
 use crate::api_key_repository::ApiKeyRepository;
 use crate::auth;
 
@@ -121,7 +123,7 @@ pub fn grpc_auth_interceptor(
             .insert(auth_state.dev_tenant.clone());
         request
             .metadata_mut()
-            .insert("x-kraalzibar-dev-mode", "true".parse().unwrap());
+            .insert("x-kraalzibar-dev-mode", MetadataValue::from_static("true"));
 
         return Ok(request);
     }

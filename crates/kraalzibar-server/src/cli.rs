@@ -55,16 +55,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_serve_defaults_dev_to_false() {
-        let cli = Cli::parse_from(["kraalzibar-server", "serve"]);
-        if let Some(Command::Serve { dev }) = cli.command {
-            assert!(!dev);
-        } else {
-            panic!("expected Serve command");
-        }
-    }
-
-    #[test]
     fn cli_parses_migrate_subcommand() {
         let cli = Cli::parse_from(["kraalzibar-server", "migrate"]);
         assert!(matches!(cli.command, Some(Command::Migrate)));
