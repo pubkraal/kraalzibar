@@ -143,6 +143,7 @@ where
         let check_cache = moka::future::Cache::builder()
             .max_capacity(cache_config.check_cache_capacity)
             .time_to_live(Duration::from_secs(cache_config.check_cache_ttl_seconds))
+            .support_invalidation_closures()
             .build();
         Self {
             factory,
@@ -460,9 +461,18 @@ where
 
     fn invalidate_check_cache_for_tenant(&self, tenant_id: &TenantId) {
         let tid = tenant_id.clone();
-        self.check_cache
+
+        if let Err(e) = self
+            .check_cache
             .invalidate_entries_if(move |key, _value| key.tenant_id == tid)
-            .ok();
+        {
+            tracing::error!(
+                %tenant_id,
+                error = %e,
+                "per-tenant cache invalidation failed, falling back to full invalidation"
+            );
+            self.check_cache.invalidate_all();
+        }
     }
 }
 
