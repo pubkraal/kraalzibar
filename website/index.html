@@ -1,0 +1,1902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kraalzibar — ReBAC Authorization Server</title>
+  <meta name="description" content="A Zanzibar-inspired Relationship-Based Access Control (ReBAC) authorization server built in Rust. Fast, multi-tenant, schema-driven." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #07080a;
+      --surface: #0d0e13;
+      --surface-2: #13141b;
+      --border: #1c1f2c;
+      --border-2: #252839;
+      --amber: #f0b429;
+      --amber-dim: rgba(240, 180, 41, 0.12);
+      --amber-glow: rgba(240, 180, 41, 0.25);
+      --rust: #c4522a;
+      --text: #e8e4dd;
+      --text-dim: #6a6860;
+      --text-mid: #9e9a93;
+      --green: #4fb575;
+      --red: #d95f52;
+      --blue: #4a9eff;
+      --purple: #9b7fe8;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Lora', Georgia, serif;
+      font-size: 17px;
+      line-height: 1.75;
+      overflow-x: hidden;
+    }
+
+    h1, h2, h3, h4, h5, .syne {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+
+    code, pre, .mono {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    /* ─── NAV ─────────────────────────────────── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      padding: 0 3rem;
+      height: 60px;
+      display: flex; align-items: center; justify-content: space-between;
+      transition: background 0.3s, border-color 0.3s;
+      border-bottom: 1px solid transparent;
+    }
+
+    nav.scrolled {
+      background: rgba(7, 8, 10, 0.85);
+      backdrop-filter: blur(16px);
+      border-color: var(--border);
+    }
+
+    .nav-logo {
+      display: flex; align-items: center; gap: 0.6rem;
+      text-decoration: none;
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 1.1rem;
+    }
+
+    .nav-logo-k {
+      width: 30px; height: 30px;
+      background: var(--amber);
+      color: #000;
+      font-size: 0.9rem; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 5px;
+    }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 1.8rem; list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--amber); }
+
+    .nav-cta {
+      background: var(--amber) !important;
+      color: #000 !important;
+      padding: 0.35rem 1rem;
+      border-radius: 4px;
+      transition: box-shadow 0.2s, transform 0.2s !important;
+    }
+
+    .nav-cta:hover {
+      box-shadow: 0 0 18px var(--amber-glow);
+      transform: translateY(-1px);
+    }
+
+    /* ─── HERO ────────────────────────────────── */
+    .hero {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      align-items: center;
+      padding: 80px 3rem 4rem 3rem;
+      position: relative;
+      overflow: hidden;
+      max-width: 1300px;
+      margin: 0 auto;
+    }
+
+    .hero-bg-glow {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background:
+        radial-gradient(ellipse 55% 45% at 70% 48%, rgba(240,180,41,0.055) 0%, transparent 70%),
+        radial-gradient(ellipse 35% 55% at 18% 80%, rgba(196,82,42,0.035) 0%, transparent 60%);
+    }
+
+    .hero-grid-bg {
+      position: absolute; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 100%);
+    }
+
+    .hero-content { position: relative; z-index: 1; max-width: 580px; }
+
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: var(--amber-dim);
+      border: 1px solid rgba(240,180,41,0.28);
+      color: var(--amber);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem; letter-spacing: 0.05em;
+      padding: 0.28rem 0.8rem;
+      border-radius: 100px;
+      margin-bottom: 2rem;
+    }
+
+    .hero-badge-dot {
+      width: 5px; height: 5px;
+      background: var(--amber);
+      border-radius: 50%;
+      animation: blink 2.2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.8rem, 4.5vw, 4.2rem);
+      font-weight: 800;
+      margin-bottom: 1.5rem;
+      line-height: 1.08;
+    }
+
+    .hero h1 .accent { color: var(--amber); }
+
+    .hero-desc {
+      font-size: 1.1rem;
+      color: var(--text-mid);
+      margin-bottom: 2.5rem;
+      max-width: 460px;
+      line-height: 1.8;
+    }
+
+    .hero-actions { display: flex; gap: 1rem; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      padding: 0.7rem 1.4rem;
+      border-radius: 6px;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.88rem; font-weight: 600;
+      text-decoration: none; cursor: pointer;
+      transition: all 0.2s; border: none;
+    }
+
+    .btn-primary {
+      background: var(--amber); color: #000;
+    }
+
+    .btn-primary:hover {
+      background: #ffc840;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px var(--amber-glow);
+    }
+
+    .btn-secondary {
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border-2);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--text-dim);
+      transform: translateY(-1px);
+    }
+
+    /* ─── HERO GRAPH ─────────────────────────── */
+    .hero-graph {
+      position: relative; z-index: 1;
+      display: flex; justify-content: flex-end; align-items: center;
+    }
+
+    .graph-svg {
+      width: 100%;
+      max-width: 500px;
+    }
+
+    .node-box {
+      fill: var(--surface-2);
+      stroke: var(--border-2);
+      stroke-width: 1;
+      rx: 6;
+    }
+
+    .node-box-doc {
+      fill: var(--surface-2);
+      stroke: rgba(240,180,41,0.5);
+      stroke-width: 1.5;
+    }
+
+    .node-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      fill: var(--text);
+    }
+
+    .node-type {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      fill: var(--text-dim);
+    }
+
+    .edge-line {
+      stroke: var(--border-2);
+      stroke-width: 1.5;
+      fill: none;
+    }
+
+    .edge-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      fill: var(--text-dim);
+    }
+
+    .edge-pulse {
+      stroke: var(--amber);
+      stroke-width: 1.5;
+      stroke-dasharray: 5 120;
+      fill: none;
+      opacity: 0.6;
+    }
+
+    .pulse-1 { animation: flowRight 3s linear infinite; }
+    .pulse-2 { animation: flowRight 3s linear infinite 1.0s; }
+    .pulse-3 { animation: flowRight 3s linear infinite 2.0s; }
+    .pulse-4 { animation: flowRight 3s linear infinite 0.5s; }
+
+    @keyframes flowRight {
+      from { stroke-dashoffset: 125; }
+      to   { stroke-dashoffset: 0; }
+    }
+
+    .perm-badge {
+      fill: rgba(79,181,117,0.18);
+      rx: 3;
+    }
+
+    .perm-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      fill: var(--green);
+    }
+
+    /* ─── STATS BAR ──────────────────────────── */
+    .stats-bar {
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      padding: 1.4rem 3rem;
+      display: flex;
+      justify-content: center;
+      gap: 5rem;
+      flex-wrap: wrap;
+    }
+
+    .stat { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; }
+
+    .stat-val {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.7rem;
+      font-weight: 800;
+      color: var(--amber);
+      line-height: 1;
+    }
+
+    .stat-lbl {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+
+    /* ─── SECTIONS ───────────────────────────── */
+    .section-wrap {
+      padding: 6rem 3rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: var(--amber);
+      margin-bottom: 1rem;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 3vw, 2.8rem);
+      margin-bottom: 1.25rem;
+    }
+
+    .section-sub {
+      font-size: 1.05rem;
+      color: var(--text-mid);
+      max-width: 580px;
+      line-height: 1.8;
+    }
+
+    /* ─── PROBLEM SECTION ────────────────────── */
+    .problem-section {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .problem-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      margin-top: 4rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .prob-card {
+      padding: 2.2rem;
+      background: var(--bg);
+      border-right: 1px solid var(--border);
+      position: relative;
+    }
+
+    .prob-card:last-child { border-right: none; }
+
+    .prob-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 0.22rem 0.65rem;
+      border-radius: 3px;
+      margin-bottom: 1.5rem;
+      display: inline-block;
+    }
+
+    .tag-rbac { background: rgba(74,158,255,0.12); color: var(--blue); }
+    .tag-pbac { background: rgba(155,127,232,0.12); color: var(--purple); }
+    .tag-rebac { background: var(--amber-dim); color: var(--amber); }
+
+    .prob-card h3 {
+      font-size: 1.05rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .prob-card p {
+      font-size: 0.9rem;
+      color: var(--text-mid);
+      line-height: 1.65;
+    }
+
+    .prob-card .verdict {
+      margin-top: 1.2rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+
+    .verdict-bad { color: var(--red); }
+    .verdict-good { color: var(--green); }
+
+    /* ─── REBAC EXPLAIN ──────────────────────── */
+    .explain-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5rem;
+      align-items: start;
+      margin-top: 5rem;
+    }
+
+    .explain-points { display: flex; flex-direction: column; gap: 2rem; }
+
+    .explain-point { display: flex; gap: 1.25rem; }
+
+    .explain-icon {
+      flex-shrink: 0;
+      width: 36px; height: 36px;
+      background: var(--amber-dim);
+      border: 1px solid rgba(240,180,41,0.25);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem;
+    }
+
+    .explain-point h4 {
+      font-size: 0.95rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .explain-point p {
+      font-size: 0.875rem;
+      color: var(--text-mid);
+      line-height: 1.65;
+    }
+
+    /* ─── COMPARISON ─────────────────────────── */
+    .comparison-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2.5rem;
+      gap: 0;
+    }
+
+    .tab-btn {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.85rem; font-weight: 600;
+      padding: 0.7rem 1.6rem;
+      background: none; border: none;
+      color: var(--text-dim); cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: all 0.2s;
+      letter-spacing: 0.02em;
+    }
+
+    .tab-btn.active { color: var(--amber); border-bottom-color: var(--amber); }
+    .tab-btn:hover:not(.active) { color: var(--text-mid); }
+
+    .tab-panel { display: none; }
+    .tab-panel.active {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      animation: fadeSlide 0.3s ease;
+    }
+
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .comp-side {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .comp-side-header {
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      font-family: 'Syne', sans-serif;
+      font-size: 0.8rem; font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+
+    .comp-side-header .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+    }
+
+    .dot-bad { background: var(--red); }
+    .dot-good { background: var(--green); }
+
+    .comp-side-body { padding: 1.5rem; }
+
+    .comp-side-body ul {
+      list-style: none;
+      display: flex; flex-direction: column; gap: 0.75rem;
+    }
+
+    .comp-side-body li {
+      display: flex; align-items: flex-start; gap: 0.6rem;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .comp-side-body li::before {
+      content: attr(data-icon);
+      font-size: 0.75rem;
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+    }
+
+    .li-bad { color: var(--text-mid); }
+    .li-good { color: var(--text); }
+
+    /* ─── CODE BLOCKS ────────────────────────── */
+    .code-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.015);
+    }
+
+    .code-dots { display: flex; gap: 5px; }
+
+    .cdot {
+      width: 10px; height: 10px; border-radius: 50%;
+    }
+
+    .cdot-r { background: #ff5f57; }
+    .cdot-y { background: #febc2e; }
+    .cdot-g { background: #28c840; }
+
+    .code-fname {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+    }
+
+    .copy-btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      color: var(--text-dim);
+      background: none;
+      border: 1px solid var(--border-2);
+      padding: 0.18rem 0.55rem;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.02em;
+    }
+
+    .copy-btn:hover { color: var(--amber); border-color: rgba(240,180,41,0.4); }
+    .copy-btn.copied { color: var(--green); border-color: rgba(79,181,117,0.4); }
+
+    pre {
+      padding: 1.4rem 1.5rem;
+      overflow-x: auto;
+      font-size: 0.84rem;
+      line-height: 1.75;
+      tab-size: 2;
+    }
+
+    /* Schema DSL syntax */
+    .kw  { color: var(--amber);   font-weight: 600; }
+    .ty  { color: #6db5ef; }
+    .op  { color: #c586c0; }
+    .cm  { color: var(--text-dim); font-style: italic; }
+    .str { color: var(--green); }
+    .prop{ color: #b5cea8; }
+    /* JSON */
+    .jk  { color: #9cdcfe; }
+    .jv  { color: #ce9178; }
+    .jb  { color: #569cd6; }
+    .jn  { color: #b5cea8; }
+    /* Tuples */
+    .obj-ref  { color: #4ec9b0; }
+    .rel-ref  { color: var(--purple); }
+    .subj-ref { color: #9cdcfe; }
+    .sep      { color: var(--text-dim); }
+
+    /* ─── FEATURES GRID ──────────────────────── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-top: 4rem;
+    }
+
+    .feat-card {
+      background: var(--surface);
+      padding: 2rem;
+      transition: background 0.25s;
+    }
+
+    .feat-card:hover { background: var(--surface-2); }
+
+    .feat-icon {
+      font-size: 1.4rem;
+      margin-bottom: 1rem;
+    }
+
+    .feat-card h3 {
+      font-size: 0.95rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .feat-card p {
+      font-size: 0.85rem;
+      color: var(--text-mid);
+      line-height: 1.6;
+    }
+
+    /* ─── QUICK START ────────────────────────── */
+    .quickstart-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 4rem;
+      align-items: start;
+      margin-top: 4rem;
+    }
+
+    .qs-nav { position: sticky; top: 80px; }
+
+    .qs-nav-item {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.65rem 0;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+
+    .qs-nav-item:hover .qs-nav-label { color: var(--text); }
+
+    .qs-nav-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--amber);
+      width: 24px; flex-shrink: 0;
+    }
+
+    .qs-nav-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+    }
+
+    .qs-steps { display: flex; flex-direction: column; gap: 3rem; }
+
+    .qs-step {}
+
+    .qs-step-head {
+      display: flex; align-items: center; gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .qs-step-num {
+      width: 32px; height: 32px; flex-shrink: 0;
+      border: 1px solid var(--border-2);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.8rem; font-weight: 700;
+      color: var(--amber);
+    }
+
+    .qs-step h3 { font-size: 1rem; }
+
+    .qs-step p {
+      font-size: 0.9rem;
+      color: var(--text-mid);
+      margin-bottom: 1rem;
+      line-height: 1.65;
+    }
+
+    /* ─── SCHEMA SECTION ─────────────────────── */
+    .schema-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: start;
+      margin-top: 4rem;
+    }
+
+    .schema-explain { padding-top: 1rem; }
+
+    .schema-explain h3 {
+      font-size: 1.1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .schema-explain p {
+      font-size: 0.9rem;
+      color: var(--text-mid);
+      margin-bottom: 1.5rem;
+      line-height: 1.65;
+    }
+
+    .concept-list { display: flex; flex-direction: column; gap: 0.9rem; }
+
+    .concept-item {
+      display: flex; align-items: flex-start; gap: 0.75rem;
+      font-size: 0.875rem;
+      line-height: 1.55;
+    }
+
+    .concept-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 3px;
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+    }
+
+    .pill-def    { background: var(--amber-dim); color: var(--amber); }
+    .pill-rel    { background: rgba(155,127,232,0.12); color: var(--purple); }
+    .pill-perm   { background: rgba(79,181,117,0.12); color: var(--green); }
+    .pill-arrow  { background: rgba(74,158,255,0.12); color: var(--blue); }
+
+    .concept-item p { color: var(--text-mid); margin: 0; }
+
+    /* ─── ARCH SECTION ───────────────────────── */
+    .arch-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: start;
+      margin-top: 4rem;
+    }
+
+    .arch-diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      overflow: hidden;
+    }
+
+    .arch-desc { padding-top: 1rem; }
+
+    .arch-desc p {
+      font-size: 0.9rem;
+      color: var(--text-mid);
+      margin-bottom: 1.5rem;
+      line-height: 1.7;
+    }
+
+    .arch-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+
+    .arch-table th {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .arch-table td {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-mid);
+    }
+
+    .arch-table td:first-child { color: var(--amber); font-size: 0.78rem; }
+
+    .arch-table tr:last-child td { border-bottom: none; }
+
+    /* ─── SCROLL REVEAL ──────────────────────── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(22px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* stagger children */
+    .stagger-children > * {
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+
+    .stagger-children.visible > *:nth-child(1) { opacity: 1; transform: none; transition-delay: 0s; }
+    .stagger-children.visible > *:nth-child(2) { opacity: 1; transform: none; transition-delay: 0.08s; }
+    .stagger-children.visible > *:nth-child(3) { opacity: 1; transform: none; transition-delay: 0.16s; }
+    .stagger-children.visible > *:nth-child(4) { opacity: 1; transform: none; transition-delay: 0.24s; }
+    .stagger-children.visible > *:nth-child(5) { opacity: 1; transform: none; transition-delay: 0.32s; }
+    .stagger-children.visible > *:nth-child(6) { opacity: 1; transform: none; transition-delay: 0.40s; }
+
+    /* ─── INLINE BADGE ───────────────────────── */
+    .badge-inline {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      padding: 0.18rem 0.55rem;
+      border-radius: 4px;
+      vertical-align: middle;
+    }
+
+    .badge-allow { background: rgba(79,181,117,0.15); color: var(--green); }
+    .badge-deny  { background: rgba(217,95,82,0.15);  color: var(--red); }
+
+    /* ─── FOOTER ─────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      padding: 3rem;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 1.5rem;
+    }
+
+    .footer-left { display: flex; flex-direction: column; gap: 0.5rem; }
+
+    .footer-logo {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800; font-size: 1rem;
+      color: var(--text);
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+
+    .footer-tagline {
+      font-size: 0.82rem;
+      color: var(--text-dim);
+    }
+
+    .footer-links { display: flex; gap: 1.5rem; }
+
+    .footer-links a {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--amber); }
+
+    /* ─── SCROLLBAR ──────────────────────────── */
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+    /* ─── RESPONSIVE ─────────────────────────── */
+    @media (max-width: 960px) {
+      .hero {
+        grid-template-columns: 1fr;
+        padding: 100px 2rem 4rem;
+      }
+      .hero-graph { display: none; }
+      .section-wrap { padding: 4rem 2rem; }
+      .problem-grid,
+      .features-grid { grid-template-columns: 1fr; }
+      .explain-grid,
+      .schema-layout,
+      .arch-grid,
+      .quickstart-layout { grid-template-columns: 1fr; }
+      .tab-panel.active { grid-template-columns: 1fr; }
+      .stats-bar { padding: 1.4rem 2rem; gap: 2.5rem; }
+      footer { padding: 2rem; flex-direction: column; align-items: flex-start; }
+      nav { padding: 0 1.5rem; }
+      .nav-links { gap: 1.2rem; }
+      .nav-links li:nth-child(-n+3) { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- BACKGROUND GLOW -->
+<div class="hero-bg-glow"></div>
+
+<!-- ─── NAV ─────────────────────────────────── -->
+<nav id="nav">
+  <a href="#" class="nav-logo">
+    <span class="nav-logo-k">K</span>
+    Kraalzibar
+  </a>
+  <ul class="nav-links">
+    <li><a href="#rebac">ReBAC</a></li>
+    <li><a href="#comparison">Comparison</a></li>
+    <li><a href="#schema">Schema</a></li>
+    <li><a href="#quickstart">Quick Start</a></li>
+    <li><a href="https://github.com/pubkraal/kraalzibar" class="nav-cta">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- ─── HERO ─────────────────────────────────── -->
+<div style="background: var(--bg); position: relative; overflow: hidden;">
+  <div class="hero-grid-bg"></div>
+  <div class="hero" id="home">
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span class="hero-badge-dot"></span>
+        Built in Rust · Zanzibar-inspired · Multi-tenant
+      </div>
+      <h1>Authorization<br>that <span class="accent">scales</span><br>with your graph</h1>
+      <p class="hero-desc">
+        Kraalzibar is a production-ready Relationship-Based Access Control server
+        inspired by Google's Zanzibar paper. Define your authorization model once,
+        evaluate permissions with recursive graph traversal.
+      </p>
+      <div class="hero-actions">
+        <a href="#quickstart" class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+          Get Started
+        </a>
+        <a href="https://github.com/pubkraal/kraalzibar" class="btn btn-secondary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </div>
+
+    <!-- RELATIONSHIP GRAPH VISUALIZATION -->
+    <div class="hero-graph">
+      <svg class="graph-svg" viewBox="0 0 500 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="graph-title">
+        <title id="graph-title">Relationship graph: user:alice and user:bob have direct relations to document:readme; user:carol is a member of group:eng which also has viewer access to document:readme</title>
+        <!-- Edges (drawn first, behind nodes) -->
+
+        <!-- alice → document:readme (owner) -->
+        <path class="edge-line" d="M 168,72 C 240,72 280,140 330,160"/>
+        <path class="edge-pulse pulse-1" d="M 168,72 C 240,72 280,140 330,160"/>
+        <text class="edge-label" x="235" y="100" transform="rotate(-18 235 100)">owner</text>
+
+        <!-- bob → document:readme (viewer) -->
+        <line class="edge-line" x1="168" y1="190" x2="330" y2="182"/>
+        <line class="edge-pulse pulse-2" x1="168" x2="330" y1="190" y2="182" stroke-dasharray="5 120"/>
+        <text class="edge-label" x="225" y="178">viewer</text>
+
+        <!-- group:eng → document:readme (viewer) -->
+        <path class="edge-line" d="M 168,308 C 240,308 280,220 330,200"/>
+        <path class="edge-pulse pulse-3" d="M 168,308 C 240,308 280,220 330,200"/>
+        <text class="edge-label" x="230" y="280" transform="rotate(18 230 280)">viewer</text>
+
+        <!-- carol → group:eng (member) -->
+        <line class="edge-line" x1="168" y1="374" x2="110" y2="338"/>
+        <line class="edge-pulse pulse-4" x1="168" x2="110" y1="374" y2="338" stroke-dasharray="5 120"/>
+        <text class="edge-label" x="107" y="365">member</text>
+
+        <!-- NODES -->
+
+        <!-- user:alice -->
+        <g>
+          <rect class="node-box" x="20" y="52" width="148" height="40" rx="6"/>
+          <text class="node-type" x="30" y="67">user</text>
+          <text class="node-label" x="30" y="82">alice</text>
+        </g>
+
+        <!-- user:bob -->
+        <g>
+          <rect class="node-box" x="20" y="170" width="148" height="40" rx="6"/>
+          <text class="node-type" x="30" y="185">user</text>
+          <text class="node-label" x="30" y="200">bob</text>
+        </g>
+
+        <!-- group:eng -->
+        <g>
+          <rect class="node-box" x="20" y="288" width="148" height="40" rx="6"/>
+          <text class="node-type" x="30" y="303">group</text>
+          <text class="node-label" x="30" y="318">eng</text>
+        </g>
+
+        <!-- user:carol -->
+        <g>
+          <rect class="node-box" x="20" y="356" width="148" height="34" rx="6"/>
+          <text class="node-type" x="30" y="368">user</text>
+          <text class="node-label" x="30" y="381">carol</text>
+        </g>
+
+        <!-- document:readme (center, highlighted) -->
+        <g>
+          <rect class="node-box-doc" x="328" y="152" width="160" height="56" rx="6" filter="url(#amberGlow)"/>
+          <text class="node-type" x="338" y="168">document</text>
+          <text class="node-label" x="338" y="186">readme</text>
+        </g>
+
+        <!-- Permissions badges on document -->
+        <rect class="perm-badge" x="328" y="218" width="52" height="18" rx="3"/>
+        <text class="perm-label" x="334" y="230">view</text>
+        <rect class="perm-badge" x="385" y="218" width="44" height="18" rx="3"/>
+        <text class="perm-label" x="391" y="230">edit</text>
+        <rect class="perm-badge" x="433" y="218" width="55" height="18" rx="3"/>
+        <text class="perm-label" x="439" y="230">delete</text>
+
+        <!-- Legend label -->
+        <text font-family="'JetBrains Mono', monospace" font-size="9" fill="rgba(255,255,255,0.18)" x="20" y="20">relationship tuples</text>
+        <text font-family="'JetBrains Mono', monospace" font-size="9" fill="rgba(240,180,41,0.5)" x="328" y="20">computed permissions</text>
+        <line x1="328" y1="22" x2="488" y2="22" stroke="rgba(240,180,41,0.3)" stroke-width="0.5"/>
+
+        <defs>
+          <filter id="amberGlow">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+        </defs>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ─── STATS BAR ─────────────────────────────── -->
+<div class="stats-bar">
+  <div class="stat">
+    <span class="stat-val">281+</span>
+    <span class="stat-lbl">tests passing</span>
+  </div>
+  <div class="stat">
+    <span class="stat-val">gRPC+REST</span>
+    <span class="stat-lbl">dual protocol</span>
+  </div>
+  <div class="stat">
+    <span class="stat-val">Rust 1.85</span>
+    <span class="stat-lbl">edition 2024</span>
+  </div>
+  <div class="stat">
+    <span class="stat-val">multi-tenant</span>
+    <span class="stat-lbl">per-schema isolation</span>
+  </div>
+  <div class="stat">
+    <span class="stat-val">depth 6</span>
+    <span class="stat-lbl">graph traversal</span>
+  </div>
+</div>
+
+<!-- ─── PROBLEM SECTION ───────────────────────── -->
+<div class="problem-section" id="rebac">
+  <div class="section-wrap">
+    <p class="section-eyebrow reveal">The authorization problem</p>
+    <h2 class="section-title reveal">Why classic models break at scale</h2>
+    <p class="section-sub reveal">
+      As applications grow, rigid permission models collapse under the weight
+      of real-world relationships. Authorization becomes a maintenance nightmare.
+    </p>
+
+    <div class="problem-grid stagger-children">
+      <div class="prob-card">
+        <span class="prob-tag tag-rbac">RBAC</span>
+        <h3>Role-Based Access Control</h3>
+        <p>
+          Roles like <code>admin</code>, <code>editor</code>, and <code>viewer</code> work
+          fine for small teams. But sharing a document with a specific user, a group,
+          or temporarily requires new roles for every combination — leading to
+          <em>role explosion</em>.
+        </p>
+        <p class="verdict verdict-bad">
+          ✗ &nbsp;Breaks when permissions need context
+        </p>
+      </div>
+      <div class="prob-card">
+        <span class="prob-tag tag-pbac">PBAC / ABAC</span>
+        <h3>Policy &amp; Attribute-Based Control</h3>
+        <p>
+          Policies like <code>resource.owner == user.id || user.dept IN allowed_depts</code>
+          encode business logic into evaluation engines. Policies grow complex,
+          become hard to audit, and require deep knowledge to change safely.
+        </p>
+        <p class="verdict verdict-bad">
+          ✗ &nbsp;Hard to reason about at runtime
+        </p>
+      </div>
+      <div class="prob-card">
+        <span class="prob-tag tag-rebac">ReBAC ✦ Kraalzibar</span>
+        <h3>Relationship-Based Access Control</h3>
+        <p>
+          Permissions flow through a <em>graph of relationships</em>.
+          <code>alice</code> owns <code>document:readme</code> because
+          the tuple <code>document:readme#owner@user:alice</code> exists —
+          no role explosion, no complex policies, just data.
+        </p>
+        <p class="verdict verdict-good">
+          ✓ &nbsp;Self-evident, composable, auditable
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── REBAC EXPLANATION ─────────────────────── -->
+<div class="section-wrap">
+  <p class="section-eyebrow reveal">The Zanzibar model</p>
+  <h2 class="section-title reveal">Relationships <em style="font-style:italic; color: var(--amber)">are</em> the permission model</h2>
+
+  <div class="explain-grid">
+    <div>
+      <p class="section-sub" style="margin-bottom: 2rem;">
+        Google's Zanzibar paper (2019) described the authorization system
+        powering Drive, Maps, and YouTube — serving billions of ACL checks
+        per second. Kraalzibar brings that model to your infrastructure.
+      </p>
+      <p style="font-size: 0.95rem; color: var(--text-mid); line-height: 1.8; margin-bottom: 2rem;">
+        At its core, the model is simple: a <strong style="color: var(--text);">tuple</strong>
+        <code style="font-size: 0.82rem; background: var(--surface); padding: 0.15rem 0.4rem; border-radius: 3px;">object#relation@subject</code>
+        asserts that a <em>subject</em> holds a <em>relation</em> to an <em>object</em>.
+        Permissions are then evaluated by traversing the graph of these tuples — with
+        support for union, intersection, exclusion, and indirect relations through
+        <em>arrow</em> operators.
+      </p>
+      <div class="explain-points stagger-children">
+        <div class="explain-point">
+          <span class="explain-icon">🔗</span>
+          <div>
+            <h4>Composable by design</h4>
+            <p>Relations can refer to other relations. A group's members
+            inherit access granted to the group — no duplication needed.</p>
+          </div>
+        </div>
+        <div class="explain-point">
+          <span class="explain-icon">🕒</span>
+          <div>
+            <h4>Consistent snapshots</h4>
+            <p>Snapshot tokens prevent the "new enemy" problem: a write
+            returns a token; reads can be pinned to that exact snapshot.</p>
+          </div>
+        </div>
+        <div class="explain-point">
+          <span class="explain-icon">🏗️</span>
+          <div>
+            <h4>Schema-driven</h4>
+            <p>Types, relations, and permissions are declared in a DSL.
+            Breaking changes are rejected unless you force-override them.</p>
+          </div>
+        </div>
+        <div class="explain-point">
+          <span class="explain-icon">🔍</span>
+          <div>
+            <h4>Bidirectional queries</h4>
+            <p>Ask "can Alice view this?" <em>and</em> "who can view this?"
+            <em>and</em> "what can Alice view?" — all natively supported.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="code-block reveal">
+        <div class="code-header">
+          <div class="code-dots">
+            <span class="cdot cdot-r"></span>
+            <span class="cdot cdot-y"></span>
+            <span class="cdot cdot-g"></span>
+          </div>
+          <span class="code-fname">Relationship tuples</span>
+          <button class="copy-btn" data-copy="tuples">copy</button>
+        </div>
+        <pre id="tuples"><span class="cm">// object#relation@subject</span>
+
+<span class="obj-ref">document:readme</span><span class="sep">#</span><span class="rel-ref">owner</span><span class="sep">@</span><span class="subj-ref">user:alice</span>
+<span class="obj-ref">document:readme</span><span class="sep">#</span><span class="rel-ref">viewer</span><span class="sep">@</span><span class="subj-ref">user:bob</span>
+<span class="obj-ref">document:readme</span><span class="sep">#</span><span class="rel-ref">viewer</span><span class="sep">@</span><span class="subj-ref">group:eng#member</span>
+<span class="obj-ref">group:eng</span><span class="sep">#</span><span class="rel-ref">member</span><span class="sep">@</span><span class="subj-ref">user:carol</span>
+
+<span class="cm">// Permission checks evaluate the graph:</span>
+<span class="cm">// alice  → view document:readme?  </span><span style="color:var(--green)">✓ allowed</span>
+<span class="cm">// bob    → edit document:readme?  </span><span style="color:var(--red)">✗ denied</span>
+<span class="cm">// carol  → view document:readme?  </span><span style="color:var(--green)">✓ allowed (via group:eng)</span></pre>
+      </div>
+
+      <div style="margin-top: 1.5rem;" class="code-block reveal">
+        <div class="code-header">
+          <div class="code-dots">
+            <span class="cdot cdot-r"></span>
+            <span class="cdot cdot-y"></span>
+            <span class="cdot cdot-g"></span>
+          </div>
+          <span class="code-fname">Check result</span>
+        </div>
+        <pre><span class="jk">"subject"</span><span>: </span><span class="jv">"user:carol"</span><span>,</span>
+<span class="jk">"permission"</span><span>: </span><span class="jv">"view"</span><span>,</span>
+<span class="jk">"resource"</span><span>: </span><span class="jv">"document:readme"</span>
+
+<span style="color:var(--text-dim)">→ traversal path:</span>
+  <span class="subj-ref">user:carol</span>
+    <span class="sep">└─ member of </span><span class="obj-ref">group:eng</span>
+         <span class="sep">└─ viewer of </span><span class="obj-ref">document:readme</span>
+              <span class="sep">└─ view = viewer + owner</span>
+                   <span style="color:var(--green)">✓ ALLOWED</span></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── COMPARISON ────────────────────────────── -->
+<div style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);" id="comparison">
+  <div class="section-wrap">
+    <p class="section-eyebrow reveal">Model comparison</p>
+    <h2 class="section-title reveal">Choosing the right model for the job</h2>
+    <p class="section-sub reveal" style="margin-bottom: 3rem;">
+      Each model has its place — but when you need fine-grained, contextual,
+      scalable access control, ReBAC is the clear choice.
+    </p>
+
+    <div class="comparison-tabs reveal" role="tablist" aria-label="Authorization model comparison">
+      <button class="tab-btn active" data-tab="rbac" role="tab" aria-selected="true" aria-controls="tab-rbac">RBAC</button>
+      <button class="tab-btn" data-tab="pbac" role="tab" aria-selected="false" aria-controls="tab-pbac">PBAC / ABAC</button>
+      <button class="tab-btn" data-tab="rebac" role="tab" aria-selected="false" aria-controls="tab-rebac">ReBAC (Kraalzibar)</button>
+    </div>
+
+    <!-- RBAC Panel -->
+    <div class="tab-panel active" id="tab-rbac" role="tabpanel">
+      <div class="comp-side">
+        <div class="comp-side-header">
+          <span class="dot dot-bad"></span>
+          The challenge with RBAC
+        </div>
+        <div class="comp-side-body">
+          <ul>
+            <li class="li-bad" data-icon="⚠">Sharing <code>document:quarterly-report</code> with a specific external contractor requires a new role, say <code>contractor-doc-viewer-12</code></li>
+            <li class="li-bad" data-icon="⚠">Temporary access? Add another role. Project-scoped access? More roles. Role count grows exponentially.</li>
+            <li class="li-bad" data-icon="⚠">Permission inheritance is opaque — which role granted this access? Hard to audit or revoke safely.</li>
+            <li class="li-bad" data-icon="⚠">Hierarchical resources (folders containing folders) require duplicating role assignments at every level.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-side-header">
+          <span class="dot dot-good"></span>
+          What you want instead
+        </div>
+        <div class="comp-side-body">
+          <p style="font-size:0.875rem; color: var(--text-mid); margin-bottom: 1rem; line-height: 1.6;">
+            A direct tuple: <code style="font-size:0.8rem; background: var(--surface-2); padding: 0.1rem 0.3rem; border-radius: 2px;">document:quarterly-report#viewer@user:contractor</code>
+          </p>
+          <ul>
+            <li class="li-good" data-icon="✓">No new role needed — the relationship is the permission</li>
+            <li class="li-good" data-icon="✓">Revoking access is deleting a single tuple</li>
+            <li class="li-good" data-icon="✓">Audit trail is just the tuple history</li>
+            <li class="li-good" data-icon="✓">Scales to billions of objects without role proliferation</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- PBAC Panel -->
+    <div class="tab-panel" id="tab-pbac" role="tabpanel">
+      <div class="comp-side">
+        <div class="comp-side-header">
+          <span class="dot dot-bad"></span>
+          The challenge with PBAC/ABAC
+        </div>
+        <div class="comp-side-body">
+          <ul>
+            <li class="li-bad" data-icon="⚠">Policies encode business logic: <code>resource.owner == subject.id || (subject.clearance >= resource.level && !resource.restricted)</code></li>
+            <li class="li-bad" data-icon="⚠">Policy engines evaluate at request time — logic is hidden in code, not visible in data</li>
+            <li class="li-bad" data-icon="⚠">Impossible to answer "who has access to X?" without scanning all subjects against all policies</li>
+            <li class="li-bad" data-icon="⚠">Changing one policy can silently break unrelated access rules</li>
+          </ul>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-side-header">
+          <span class="dot dot-good"></span>
+          What you want instead
+        </div>
+        <div class="comp-side-body">
+          <p style="font-size:0.875rem; color: var(--text-mid); margin-bottom: 1rem; line-height: 1.6;">
+            Permission logic is declared in the <em>schema</em>, not buried in policy strings:
+          </p>
+          <ul>
+            <li class="li-good" data-icon="✓"><code style="font-size:0.8rem; background: var(--surface-2); padding: 0.1rem 0.3rem; border-radius: 2px;">permission view = viewer + owner</code> — composable, readable</li>
+            <li class="li-good" data-icon="✓">Lookup queries answer "who can view X?" natively and efficiently</li>
+            <li class="li-good" data-icon="✓">Schema changes are validated for breaking changes before applying</li>
+            <li class="li-good" data-icon="✓">Access state is data, not code — easy to inspect and audit</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ReBAC Panel -->
+    <div class="tab-panel" id="tab-rebac" role="tabpanel">
+      <div class="comp-side">
+        <div class="comp-side-header">
+          <span class="dot dot-good"></span>
+          How Kraalzibar handles it
+        </div>
+        <div class="comp-side-body">
+          <ul>
+            <li class="li-good" data-icon="✓">Declare types &amp; relations in a schema DSL once</li>
+            <li class="li-good" data-icon="✓">Write tuples to grant access — no role creation required</li>
+            <li class="li-good" data-icon="✓">Permission checks traverse the graph recursively (max depth 6)</li>
+            <li class="li-good" data-icon="✓">Groups, nested groups, and indirect access work automatically</li>
+          </ul>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-side-header">
+          <span class="dot dot-good"></span>
+          Built-in capabilities
+        </div>
+        <div class="comp-side-body">
+          <ul>
+            <li class="li-good" data-icon="✓"><code>check</code> — does subject have permission on object?</li>
+            <li class="li-good" data-icon="✓"><code>lookup_resources</code> — what can this subject access?</li>
+            <li class="li-good" data-icon="✓"><code>lookup_subjects</code> — who can access this resource?</li>
+            <li class="li-good" data-icon="✓"><code>expand</code> — debug the full permission tree</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── SCHEMA DSL ─────────────────────────────── -->
+<div class="section-wrap" id="schema">
+  <p class="section-eyebrow reveal">Schema DSL</p>
+  <h2 class="section-title reveal">Express your authorization model in code</h2>
+
+  <div class="schema-layout">
+    <div class="code-block reveal">
+      <div class="code-header">
+        <div class="code-dots">
+          <span class="cdot cdot-r"></span>
+          <span class="cdot cdot-y"></span>
+          <span class="cdot cdot-g"></span>
+        </div>
+        <span class="code-fname">schema.kz</span>
+        <button class="copy-btn" data-copy="schema-dsl">copy</button>
+      </div>
+      <pre id="schema-dsl"><span class="cm">// Define your object types</span>
+<span class="kw">definition</span> <span class="ty">user</span> {}
+
+<span class="kw">definition</span> <span class="ty">group</span> {
+  <span class="kw">relation</span> <span class="prop">member</span>: <span class="ty">user</span>
+}
+
+<span class="kw">definition</span> <span class="ty">folder</span> {
+  <span class="kw">relation</span> <span class="prop">owner</span>:  <span class="ty">user</span>
+  <span class="kw">relation</span> <span class="prop">editor</span>: <span class="ty">user</span> <span class="op">|</span> <span class="ty">group</span><span class="sep">#</span><span class="prop">member</span>
+  <span class="kw">relation</span> <span class="prop">viewer</span>: <span class="ty">user</span> <span class="op">|</span> <span class="ty">group</span><span class="sep">#</span><span class="prop">member</span>
+
+  <span class="kw">permission</span> <span class="prop">view</span>   <span class="op">=</span> viewer <span class="op">+</span> editor <span class="op">+</span> owner
+  <span class="kw">permission</span> <span class="prop">edit</span>   <span class="op">=</span> editor <span class="op">+</span> owner
+  <span class="kw">permission</span> <span class="prop">delete</span> <span class="op">=</span> owner
+}
+
+<span class="kw">definition</span> <span class="ty">document</span> {
+  <span class="kw">relation</span> <span class="prop">parent</span>: <span class="ty">folder</span>
+  <span class="kw">relation</span> <span class="prop">owner</span>:  <span class="ty">user</span>
+  <span class="kw">relation</span> <span class="prop">viewer</span>: <span class="ty">user</span> <span class="op">|</span> <span class="ty">group</span><span class="sep">#</span><span class="prop">member</span>
+
+  <span class="cm">// Inherit folder permissions via arrow →</span>
+  <span class="kw">permission</span> <span class="prop">view</span>   <span class="op">=</span> viewer <span class="op">+</span> owner <span class="op">+</span> parent<span class="op">-></span>view
+  <span class="kw">permission</span> <span class="prop">edit</span>   <span class="op">=</span> owner  <span class="op">+</span> parent<span class="op">-></span>edit
+  <span class="kw">permission</span> <span class="prop">delete</span> <span class="op">=</span> owner
+}</pre>
+    </div>
+
+    <div class="schema-explain reveal">
+      <h3>Four building blocks</h3>
+      <p>The schema DSL maps directly to the authorization semantics.
+         What you write is what gets checked.</p>
+
+      <div class="concept-list">
+        <div class="concept-item">
+          <span class="concept-pill pill-def">definition</span>
+          <p>Declares an object type (<code>user</code>, <code>document</code>, <code>group</code>).
+          Every resource in your system maps to a defined type.</p>
+        </div>
+        <div class="concept-item">
+          <span class="concept-pill pill-rel">relation</span>
+          <p>A named edge in the graph. <code>viewer: user | group#member</code>
+          means the viewer can be a direct user <em>or</em> any member of a group.</p>
+        </div>
+        <div class="concept-item">
+          <span class="concept-pill pill-perm">permission</span>
+          <p>A computed boolean from union (<code>+</code>), intersection (<code>&amp;</code>),
+          and exclusion (<code>-</code>) of relations and other permissions.</p>
+        </div>
+        <div class="concept-item">
+          <span class="concept-pill pill-arrow">arrow →</span>
+          <p><code>parent->view</code> traverses the <code>parent</code> relation
+          and checks <code>view</code> on the target — enabling permission inheritance.</p>
+        </div>
+      </div>
+
+      <div style="margin-top: 2rem; padding: 1.25rem; background: var(--amber-dim); border: 1px solid rgba(240,180,41,0.22); border-radius: 8px;">
+        <p style="font-size: 0.85rem; color: var(--text); margin: 0; line-height: 1.6;">
+          <strong>Breaking change protection:</strong> <code>WriteSchema</code> validates
+          the new schema against existing tuples. Removing a type or relation that's
+          in use is rejected unless you pass <code>force: true</code>.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── FEATURES GRID ─────────────────────────── -->
+<div style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="section-wrap">
+    <p class="section-eyebrow reveal">Features</p>
+    <h2 class="section-title reveal">Everything you need in production</h2>
+
+    <div class="features-grid stagger-children">
+      <div class="feat-card">
+        <div class="feat-icon">🦀</div>
+        <h3>Written in Rust</h3>
+        <p>Memory-safe, zero-overhead, blazing-fast. Edition 2024 with native async traits.
+           No GC pauses in your hot check path.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🏗️</div>
+        <h3>Multi-tenant isolation</h3>
+        <p>Each tenant gets a separate PostgreSQL schema. Data, schema, and
+           API keys are fully isolated — share one cluster, zero cross-tenant leakage.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">⚡</div>
+        <h3>gRPC + REST APIs</h3>
+        <p>Both protocols, consistent behavior. Rust, Go, and TypeScript SDKs
+           included. Protobuf definitions are versioned under <code>proto/</code>.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">📸</div>
+        <h3>Snapshot consistency</h3>
+        <p>Writes return a <em>zed token</em>. Subsequent reads can be pinned to
+           that snapshot — preventing the "new enemy" problem of stale cache reads.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🚀</div>
+        <h3>Schema &amp; check caching</h3>
+        <p>Schema cache with TTL + local invalidation on write. Check cache
+           keyed by snapshot token — immutable entries never go stale.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">📊</div>
+        <h3>Prometheus metrics</h3>
+        <p>Request counters, latency histograms, and cache hit/miss rates at
+           <code>/metrics</code>. Drop-in for Grafana dashboards.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🔍</div>
+        <h3>OpenTelemetry tracing</h3>
+        <p>Optional OTLP export (feature-gated). Per-request spans for
+           <code>check</code>, <code>lookup</code>, and schema operations.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">📋</div>
+        <h3>Structured audit log</h3>
+        <p>Structured JSON events for every schema write, relationship write,
+           and authentication attempt. Routed to stdout — 12-factor compliant.</p>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🐳</div>
+        <h3>Docker-ready</h3>
+        <p>Pre-built images on Docker Hub. Full <code>docker compose</code> stack with
+           PostgreSQL, Prometheus, Tempo, Grafana, and OTel Collector included.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── QUICK START ───────────────────────────── -->
+<div class="section-wrap" id="quickstart">
+  <p class="section-eyebrow reveal">Quick start</p>
+  <h2 class="section-title reveal">Up and running in minutes</h2>
+  <p class="section-sub reveal">
+    No database needed to start. The dev mode runs entirely in-memory
+    with no authentication required.
+  </p>
+
+  <div class="quickstart-layout">
+    <div class="qs-nav reveal">
+      <div class="qs-nav-item"><span class="qs-nav-num">01</span><span class="qs-nav-label">Start the server</span></div>
+      <div class="qs-nav-item"><span class="qs-nav-num">02</span><span class="qs-nav-label">Write a schema</span></div>
+      <div class="qs-nav-item"><span class="qs-nav-num">03</span><span class="qs-nav-label">Create relationships</span></div>
+      <div class="qs-nav-item"><span class="qs-nav-num">04</span><span class="qs-nav-label">Check permissions</span></div>
+      <div class="qs-nav-item"><span class="qs-nav-num">05</span><span class="qs-nav-label">Lookup subjects</span></div>
+      <div class="qs-nav-item"><span class="qs-nav-num">06</span><span class="qs-nav-label">Production setup</span></div>
+    </div>
+
+    <div class="qs-steps stagger-children">
+
+      <div class="qs-step">
+        <div class="qs-step-head">
+          <span class="qs-step-num">01</span>
+          <h3>Start the server</h3>
+        </div>
+        <p>Build and run with Cargo or pull the Docker image. Starts on gRPC <code>:50051</code> and REST <code>:8080</code>.</p>
+        <div class="code-block">
+          <div class="code-header">
+            <div class="code-dots"><span class="cdot cdot-r"></span><span class="cdot cdot-y"></span><span class="cdot cdot-g"></span></div>
+            <span class="code-fname">shell</span>
+            <button class="copy-btn" data-copy="step1">copy</button>
+          </div>
+          <pre id="step1"><span style="color:var(--text-dim)"># From source</span>
+cargo run --release
+
+<span style="color:var(--text-dim)"># Docker (dev mode — in-memory, no auth)</span>
+docker run -p 50051:50051 -p 8080:8080 \
+  pubkraal/kraalzibar-server:latest</pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-step-head">
+          <span class="qs-step-num">02</span>
+          <h3>Write an authorization schema</h3>
+        </div>
+        <p>Define your types, relations, and computed permissions.</p>
+        <div class="code-block">
+          <div class="code-header">
+            <div class="code-dots"><span class="cdot cdot-r"></span><span class="cdot cdot-y"></span><span class="cdot cdot-g"></span></div>
+            <span class="code-fname">POST /v1/schema</span>
+            <button class="copy-btn" data-copy="step2">copy</button>
+          </div>
+          <pre id="step2">curl -s -X POST http://localhost:8080/v1/schema \
+  -H <span class="str">'Content-Type: application/json'</span> \
+  -d <span class="str">'{
+    "schema": "definition user {}\n\ndefinition document {\n  relation owner: user\n  relation viewer: user\n  permission view = viewer + owner\n  permission edit = owner\n}"
+  }'</span>
+
+<span style="color:var(--text-dim)"># Response:</span>
+{ <span class="jk">"breaking_changes_overridden"</span>: <span class="jb">false</span> }</pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-step-head">
+          <span class="qs-step-num">03</span>
+          <h3>Create relationships</h3>
+        </div>
+        <p>Write tuples to grant access. Returns a snapshot token for causal consistency.</p>
+        <div class="code-block">
+          <div class="code-header">
+            <div class="code-dots"><span class="cdot cdot-r"></span><span class="cdot cdot-y"></span><span class="cdot cdot-g"></span></div>
+            <span class="code-fname">POST /v1/relationships/write</span>
+            <button class="copy-btn" data-copy="step3">copy</button>
+          </div>
+          <pre id="step3">curl -s -X POST http://localhost:8080/v1/relationships/write \
+  -H <span class="str">'Content-Type: application/json'</span> \
+  -d <span class="str">'{
+    "updates": [
+      {
+        "operation": "touch",
+        "resource_type": "document", "resource_id": "readme",
+        "relation": "owner",
+        "subject_type": "user", "subject_id": "alice"
+      },
+      {
+        "operation": "touch",
+        "resource_type": "document", "resource_id": "readme",
+        "relation": "viewer",
+        "subject_type": "user", "subject_id": "bob"
+      }
+    ]
+  }'</span>
+
+<span style="color:var(--text-dim)"># Response:</span>
+{ <span class="jk">"written_at"</span>: <span class="str">"1"</span> }</pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-step-head">
+          <span class="qs-step-num">04</span>
+          <h3>Check permissions</h3>
+        </div>
+        <p>Ask whether a subject has a permission on a resource. Fast, recursive graph traversal.</p>
+        <div class="code-block">
+          <div class="code-header">
+            <div class="code-dots"><span class="cdot cdot-r"></span><span class="cdot cdot-y"></span><span class="cdot cdot-g"></span></div>
+            <span class="code-fname">POST /v1/permissions/check</span>
+            <button class="copy-btn" data-copy="step4">copy</button>
+          </div>
+          <pre id="step4">curl -s -X POST http://localhost:8080/v1/permissions/check \
+  -H <span class="str">'Content-Type: application/json'</span> \
+  -d <span class="str">'{
+    "resource_type": "document", "resource_id": "readme",
+    "permission": "edit",
+    "subject_type": "user", "subject_id": "alice"
+  }'</span>
+
+{ <span class="jk">"allowed"</span>: <span class="jb">true</span>,  <span class="jk">"checked_at"</span>: <span class="str">"1"</span> }  <span style="color:var(--green)">← alice is owner → can edit</span>
+
+curl -s -X POST http://localhost:8080/v1/permissions/check \
+  -H <span class="str">'Content-Type: application/json'</span> \
+  -d <span class="str">'{ ..., "subject_id": "bob", "permission": "edit" }'</span>
+
+{ <span class="jk">"allowed"</span>: <span class="jb">false</span>, <span class="jk">"checked_at"</span>: <span class="str">"1"</span> }  <span style="color:var(--red)">← bob is only viewer</span></pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-step-head">
+          <span class="qs-step-num">05</span>
+          <h3>Lookup subjects</h3>
+        </div>
+        <p>Ask who has a given permission on a resource — or which resources a subject can access.</p>
+        <div class="code-block">
+          <div class="code-header">
+            <div class="code-dots"><span class="cdot cdot-r"></span><span class="cdot cdot-y"></span><span class="cdot cdot-g"></span></div>
+            <span class="code-fname">POST /v1/permissions/subjects</span>
+            <button class="copy-btn" data-copy="step5">copy</button>
+          </div>
+          <pre id="step5"><span style="color:var(--text-dim)"># Who can view document:readme?</span>
+curl -s -X POST http://localhost:8080/v1/permissions/subjects \
+  -d <span class="str">'{
+    "resource_type": "document", "resource_id": "readme",
+    "permission": "view", "subject_type": "user"
+  }'</span>
+
+{
+  <span class="jk">"subjects"</span>: [
+    { <span class="jk">"subject_type"</span>: <span class="str">"user"</span>, <span class="jk">"subject_id"</span>: <span class="str">"alice"</span> },
+    { <span class="jk">"subject_type"</span>: <span class="str">"user"</span>, <span class="jk">"subject_id"</span>: <span class="str">"bob"</span> }
+  ],
+  <span class="jk">"looked_up_at"</span>: <span class="str">"1"</span>
+}</pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-step-head">
+          <span class="qs-step-num">06</span>
+          <h3>Production with PostgreSQL</h3>
+        </div>
+        <p>Provision tenants, create API keys, and connect persistent storage. Each tenant is fully isolated.</p>
+        <div class="code-block">
+          <div class="code-header">
+            <div class="code-dots"><span class="cdot cdot-r"></span><span class="cdot cdot-y"></span><span class="cdot cdot-g"></span></div>
+            <span class="code-fname">shell</span>
+            <button class="copy-btn" data-copy="step6">copy</button>
+          </div>
+          <pre id="step6"><span style="color:var(--text-dim)"># 1. Run database migrations</span>
+kraalzibar-server migrate --config config.toml
+
+<span style="color:var(--text-dim)"># 2. Provision a tenant</span>
+kraalzibar-server provision-tenant --name acme --config config.toml
+
+<span style="color:var(--text-dim)"># 3. Create an API key</span>
+kraalzibar-server create-api-key --tenant-name acme --config config.toml
+<span style="color:var(--text-dim)"># → kraalzibar_a1b2c3d4_s5t6u7v8w9x0y1z2a3b4c5d6e7f8</span>
+
+<span style="color:var(--text-dim)"># 4. Use the key in requests</span>
+curl -X POST http://localhost:8080/v1/permissions/check \
+  -H <span class="str">'Authorization: Bearer kraalzibar_a1b2c3d4_...'</span> \
+  -d <span class="str">'{ ... }'</span></pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ─── ARCHITECTURE ───────────────────────────── -->
+<div style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="section-wrap">
+    <p class="section-eyebrow reveal">Architecture</p>
+    <h2 class="section-title reveal">A clean workspace crate design</h2>
+
+    <div class="arch-grid">
+      <div class="arch-diagram reveal">
+        <svg viewBox="0 0 440 320" xmlns="http://www.w3.org/2000/svg" width="100%">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a3d52"/>
+            </marker>
+            <marker id="arrowAmber" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(240,180,41,0.5)"/>
+            </marker>
+          </defs>
+
+          <!-- REST + gRPC -->
+          <rect x="10" y="10" width="100" height="36" rx="5" fill="#13141b" stroke="#252839" stroke-width="1"/>
+          <text font-family="'JetBrains Mono', monospace" font-size="9" fill="#6db5ef" x="20" y="23">REST</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="10" fill="#e8e4dd" x="20" y="37">:8080</text>
+
+          <rect x="120" y="10" width="100" height="36" rx="5" fill="#13141b" stroke="#252839" stroke-width="1"/>
+          <text font-family="'JetBrains Mono', monospace" font-size="9" fill="#9b7fe8" x="130" y="23">gRPC</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="10" fill="#e8e4dd" x="130" y="37">:50051</text>
+
+          <!-- arrows down to server -->
+          <line x1="60" y1="46" x2="60" y2="80" stroke="#252839" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <line x1="170" y1="46" x2="170" y2="80" stroke="#252839" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- kraalzibar-server -->
+          <rect x="10" y="80" width="210" height="50" rx="5" fill="#0d0e13" stroke="rgba(240,180,41,0.4)" stroke-width="1.5"/>
+          <text font-family="'Syne', sans-serif" font-size="8" fill="rgba(240,180,41,0.7)" x="20" y="93" letter-spacing="0.06em">CRATE</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="11" fill="#e8e4dd" font-weight="700" x="20" y="110">kraalzibar-server</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="20" y="122">AuthzService · Middleware · Config</text>
+
+          <!-- arrow to core -->
+          <line x1="115" y1="130" x2="115" y2="162" stroke="#252839" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- kraalzibar-core -->
+          <rect x="10" y="162" width="210" height="50" rx="5" fill="#0d0e13" stroke="#252839" stroke-width="1"/>
+          <text font-family="'Syne', sans-serif" font-size="8" fill="rgba(240,180,41,0.7)" x="20" y="175" letter-spacing="0.06em">CRATE</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="11" fill="#e8e4dd" font-weight="700" x="20" y="192">kraalzibar-core</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="20" y="204">Schema DSL · Graph Engine · Types</text>
+
+          <!-- arrow to storage -->
+          <line x1="115" y1="212" x2="115" y2="244" stroke="#252839" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+          <!-- kraalzibar-storage -->
+          <rect x="10" y="244" width="210" height="50" rx="5" fill="#0d0e13" stroke="#252839" stroke-width="1"/>
+          <text font-family="'Syne', sans-serif" font-size="8" fill="rgba(240,180,41,0.7)" x="20" y="257" letter-spacing="0.06em">CRATE</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="11" fill="#e8e4dd" font-weight="700" x="20" y="274">kraalzibar-storage</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="20" y="286">InMemory + PostgreSQL backends</text>
+
+          <!-- PostgreSQL box -->
+          <rect x="10" y="308" width="100" height="8" rx="3" fill="#1c1f2c"/>
+          <rect x="120" y="308" width="100" height="8" rx="3" fill="#1c1f2c"/>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#4a9eff" x="15" y="315">in-memory</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#4a9eff" x="125" y="315">PostgreSQL</text>
+
+          <!-- Client crate -->
+          <rect x="250" y="80" width="180" height="50" rx="5" fill="#0d0e13" stroke="#1c1f2c" stroke-width="1"/>
+          <text font-family="'Syne', sans-serif" font-size="8" fill="rgba(240,180,41,0.7)" x="260" y="93" letter-spacing="0.06em">CRATE</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="11" fill="#e8e4dd" font-weight="700" x="260" y="110">kraalzibar-client</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="260" y="122">Rust gRPC SDK</text>
+
+          <!-- SDKs -->
+          <rect x="250" y="162" width="82" height="36" rx="5" fill="#13141b" stroke="#1c1f2c"/>
+          <text font-family="'JetBrains Mono', monospace" font-size="9" fill="#4fb575" x="260" y="176">sdks/go</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="260" y="190">gRPC</text>
+
+          <rect x="342" y="162" width="88" height="36" rx="5" fill="#13141b" stroke="#1c1f2c"/>
+          <text font-family="'JetBrains Mono', monospace" font-size="9" fill="#4fb575" x="352" y="176">sdks/ts</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="352" y="190">REST</text>
+
+          <!-- Observability -->
+          <rect x="250" y="228" width="180" height="36" rx="5" fill="#13141b" stroke="#1c1f2c"/>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#9b7fe8" x="260" y="242">metrics + tracing</text>
+          <text font-family="'JetBrains Mono', monospace" font-size="8" fill="#6a6860" x="260" y="256">Prometheus · OTLP · Grafana</text>
+        </svg>
+      </div>
+
+      <div class="arch-desc reveal">
+        <p>
+          Kraalzibar is a Cargo workspace with four crates and three client SDKs.
+          The layered design keeps the domain logic free from transport and storage concerns.
+        </p>
+
+        <table class="arch-table">
+          <thead>
+            <tr>
+              <th>Crate / SDK</th>
+              <th>Responsibility</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>kraalzibar-core</td><td>Schema DSL parser, graph engine, domain types</td></tr>
+            <tr><td>kraalzibar-storage</td><td>Storage trait, InMemory + PostgreSQL backends</td></tr>
+            <tr><td>kraalzibar-server</td><td>gRPC + REST handlers, config, metrics, CLI</td></tr>
+            <tr><td>kraalzibar-client</td><td>Rust gRPC SDK</td></tr>
+            <tr><td>sdks/go</td><td>Go gRPC SDK</td></tr>
+            <tr><td>sdks/typescript</td><td>TypeScript REST SDK</td></tr>
+          </tbody>
+        </table>
+
+        <div style="margin-top: 1.5rem; padding: 1.25rem; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;">
+          <p style="font-size: 0.85rem; color: var(--text-mid); margin: 0; line-height: 1.65;">
+            <strong style="color: var(--text);">12-factor compliant.</strong>
+            All configuration via environment variables (<code>KRAALZIBAR_</code> prefix).
+            Structured JSON logs to stdout. Stateless server — all state in PostgreSQL.
+          </p>
+        </div>
+
+        <div style="margin-top: 1rem; padding: 1.25rem; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;">
+          <p style="font-size: 0.85rem; color: var(--text-mid); margin: 0; line-height: 1.65;">
+            <strong style="color: var(--text);">Engine limits.</strong>
+            Max traversal depth 6. Schema caps: 50 types, 30 relations,
+            30 permissions per type. Lookup limit 1000 results. Configurable.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── FOOTER ────────────────────────────────── -->
+<footer>
+  <div class="footer-left">
+    <div class="footer-logo">
+      <span class="nav-logo-k">K</span>
+      Kraalzibar
+    </div>
+    <span class="footer-tagline">A Zanzibar-inspired ReBAC authorization server · Built in Rust</span>
+  </div>
+  <div class="footer-links">
+    <a href="https://github.com/pubkraal/kraalzibar">GitHub</a>
+    <a href="https://hub.docker.com/r/pubkraal/kraalzibar-server">Docker Hub</a>
+    <a href="#quickstart">Quick Start</a>
+    <a href="#schema">Schema DSL</a>
+  </div>
+</footer>
+
+<script>
+  // ── NAV SCROLL STATE ──────────────────────────
+  const nav = document.getElementById('nav');
+  window.addEventListener('scroll', () => {
+    nav.classList.toggle('scrolled', window.scrollY > 40);
+  }, { passive: true });
+
+  // ── SCROLL REVEAL ─────────────────────────────
+  const revealObserver = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+        revealObserver.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+
+  document.querySelectorAll('.reveal, .stagger-children').forEach(el => {
+    revealObserver.observe(el);
+  });
+
+  // ── TABS ──────────────────────────────────────
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+      document.getElementById('tab-' + tab).classList.add('active');
+    });
+  });
+
+  // ── COPY BUTTONS ─────────────────────────────
+  document.querySelectorAll('.copy-btn[data-copy]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.copy);
+      if (!target) return;
+      const text = target.innerText || target.textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      }).catch(() => {
+        // Fallback for environments without clipboard API
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    });
+  });
+
+  // ── GRAPH EDGE PULSE ANIMATION ────────────────
+  // Restart animations on visibility to keep them in sync
+  document.querySelectorAll('.edge-pulse').forEach((el, i) => {
+    el.style.animationDelay = `${i * 0.8}s`;
+  });
+</script>
+
+</body>
+</html>
