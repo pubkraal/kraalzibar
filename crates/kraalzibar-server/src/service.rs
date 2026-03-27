@@ -143,6 +143,7 @@ where
         let check_cache = moka::future::Cache::builder()
             .max_capacity(cache_config.check_cache_capacity)
             .time_to_live(Duration::from_secs(cache_config.check_cache_ttl_seconds))
+            .support_invalidation_closures()
             .build();
         Self {
             factory,
@@ -272,7 +273,7 @@ where
     ) -> Result<SnapshotToken, ApiError> {
         let store = self.factory.for_tenant(tenant_id);
         let token = store.write(writes, deletes).await?;
-        self.check_cache.invalidate_all();
+        self.invalidate_check_cache_for_tenant(tenant_id);
         audit::audit_relationship_write(tenant_id, writes.len(), deletes.len(), &token);
         Ok(token)
     }
@@ -321,7 +322,7 @@ where
 
         store.write_schema(definition).await?;
         self.schema_cache.invalidate(tenant_id).await;
-        self.check_cache.invalidate_all();
+        self.invalidate_check_cache_for_tenant(tenant_id);
 
         // Schema writes don't produce a snapshot token (schemas aren't versioned
         // in the tuple store), so the audit event has no token.
@@ -455,6 +456,22 @@ where
             Consistency::AtLeastAsFresh(token) | Consistency::AtExactSnapshot(token) => {
                 Ok(Some(token))
             }
+        }
+    }
+
+    fn invalidate_check_cache_for_tenant(&self, tenant_id: &TenantId) {
+        let tid = tenant_id.clone();
+
+        if let Err(e) = self
+            .check_cache
+            .invalidate_entries_if(move |key, _value| key.tenant_id == tid)
+        {
+            tracing::error!(
+                %tenant_id,
+                error = %e,
+                "per-tenant cache invalidation failed, falling back to full invalidation"
+            );
+            self.check_cache.invalidate_all();
         }
     }
 }
@@ -1686,6 +1703,159 @@ mod tests {
         assert!(
             !result1_again.allowed,
             "snapshot 1 result should be cached as denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_relationships_only_invalidates_writing_tenant_cache() {
+        let (service, tenant_id_a, factory) = make_counting_service();
+        let tenant_id_b = TenantId::new(uuid::Uuid::new_v4());
+
+        service
+            .write_schema(&tenant_id_a, SCHEMA, false)
+            .await
+            .unwrap();
+        service
+            .write_schema(&tenant_id_b, SCHEMA, false)
+            .await
+            .unwrap();
+
+        let token_a = write_tuple(
+            &service,
+            &tenant_id_a,
+            "document",
+            "readme",
+            "viewer",
+            "user",
+            "alice",
+        )
+        .await;
+
+        // Populate tenant A's check cache
+        let result_a = service
+            .check_permission(
+                &tenant_id_a,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token_a),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result_a.allowed);
+
+        let reads_after_cache_warm = factory.read_tuples_count();
+
+        // Tenant B writes a relationship — should NOT invalidate tenant A's cache
+        write_tuple(
+            &service,
+            &tenant_id_b,
+            "document",
+            "design",
+            "viewer",
+            "user",
+            "bob",
+        )
+        .await;
+
+        // Tenant A re-checks the same query — should still be cached (no new tuple reads)
+        let result_a2 = service
+            .check_permission(
+                &tenant_id_a,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token_a),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result_a2.allowed);
+
+        assert_eq!(
+            factory.read_tuples_count(),
+            reads_after_cache_warm,
+            "tenant B's write should not invalidate tenant A's cached check result"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_schema_only_invalidates_writing_tenant_cache() {
+        let (service, tenant_id_a, factory) = make_counting_service();
+        let tenant_id_b = TenantId::new(uuid::Uuid::new_v4());
+
+        service
+            .write_schema(&tenant_id_a, SCHEMA, false)
+            .await
+            .unwrap();
+        service
+            .write_schema(&tenant_id_b, SCHEMA, false)
+            .await
+            .unwrap();
+
+        let token_a = write_tuple(
+            &service,
+            &tenant_id_a,
+            "document",
+            "readme",
+            "viewer",
+            "user",
+            "alice",
+        )
+        .await;
+
+        // Populate tenant A's check cache
+        service
+            .check_permission(
+                &tenant_id_a,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token_a),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let reads_after_cache_warm = factory.read_tuples_count();
+
+        // Tenant B writes schema — should NOT invalidate tenant A's cache
+        service
+            .write_schema(&tenant_id_b, SCHEMA, true)
+            .await
+            .unwrap();
+
+        // Tenant A re-checks — should still be cached
+        let result_a2 = service
+            .check_permission(
+                &tenant_id_a,
+                make_check_input(
+                    "document",
+                    "readme",
+                    "can_view",
+                    "user",
+                    "alice",
+                    Consistency::AtExactSnapshot(token_a),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(result_a2.allowed);
+
+        assert_eq!(
+            factory.read_tuples_count(),
+            reads_after_cache_warm,
+            "tenant B's schema write should not invalidate tenant A's cached check result"
         );
     }
 
