@@ -25,6 +25,9 @@ pub enum CheckError {
     #[error("max depth exceeded: {0}")]
     MaxDepthExceeded(usize),
 
+    #[error("too many results: expand produced {0} tuples, limit is {1}")]
+    TooManyResults(usize, usize),
+
     #[error("storage error: {0}")]
     StorageError(String),
 }
@@ -33,6 +36,7 @@ pub enum CheckError {
 pub struct EngineConfig {
     pub max_depth: usize,
     pub max_concurrent_branches: usize,
+    pub max_expand_results: usize,
 }
 
 impl Default for EngineConfig {
@@ -40,6 +44,7 @@ impl Default for EngineConfig {
         Self {
             max_depth: 6,
             max_concurrent_branches: 10,
+            max_expand_results: 10_000,
         }
     }
 }
