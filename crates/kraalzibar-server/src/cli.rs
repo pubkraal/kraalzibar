@@ -14,7 +14,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Serve,
+    Serve {
+        /// Run in development mode (in-memory storage, no authentication)
+        #[arg(long)]
+        dev: bool,
+    },
     Migrate,
     ProvisionTenant {
         #[arg(long)]
@@ -41,7 +45,13 @@ mod tests {
     #[test]
     fn cli_parses_serve_subcommand() {
         let cli = Cli::parse_from(["kraalzibar-server", "serve"]);
-        assert!(matches!(cli.command, Some(Command::Serve)));
+        assert!(matches!(cli.command, Some(Command::Serve { dev: false })));
+    }
+
+    #[test]
+    fn cli_parses_serve_with_dev_flag() {
+        let cli = Cli::parse_from(["kraalzibar-server", "serve", "--dev"]);
+        assert!(matches!(cli.command, Some(Command::Serve { dev: true })));
     }
 
     #[test]
@@ -108,7 +118,7 @@ mod tests {
             "/etc/kraalzibar.toml",
         ]);
         assert_eq!(cli.config, Some(PathBuf::from("/etc/kraalzibar.toml")));
-        assert!(matches!(cli.command, Some(Command::Serve)));
+        assert!(matches!(cli.command, Some(Command::Serve { .. })));
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    pub dev_mode: bool,
     pub grpc: GrpcConfig,
     pub rest: RestConfig,
     pub database: DatabaseConfig,
@@ -232,6 +233,9 @@ impl AppConfig {
     }
 
     fn apply_env_overrides_with(&mut self, env: impl Fn(&str) -> Option<String>) {
+        if let Some(v) = env("KRAALZIBAR_DEV_MODE") {
+            self.dev_mode = v == "true" || v == "1";
+        }
         if let Some(v) = env("KRAALZIBAR_GRPC_HOST") {
             self.grpc.host = v;
         }
@@ -449,6 +453,25 @@ impl AppConfig {
             max_relations_per_type: self.schema_limits.max_relations_per_type,
             max_permissions_per_type: self.schema_limits.max_permissions_per_type,
         }
+    }
+
+    pub fn prepare_for_serve(mut self, cli_dev: bool) -> Result<Self, ConfigError> {
+        self.dev_mode = self.dev_mode || cli_dev;
+
+        if !self.database.is_configured() && !self.dev_mode {
+            return Err(ConfigError::Validation(
+                "database URL is required to start the server; set [database].url in config, \
+                 KRAALZIBAR_DATABASE_URL env var, or pass --dev for development mode"
+                    .to_string(),
+            ));
+        }
+
+        if self.dev_mode {
+            self.grpc.host = "127.0.0.1".to_string();
+            self.rest.host = "127.0.0.1".to_string();
+        }
+
+        Ok(self)
     }
 
     pub fn grpc_addr(&self) -> String {
@@ -931,6 +954,116 @@ key_path = "/etc/kraalzibar/tls/server.key"
             matches!(result, Err(ConfigError::Validation(ref msg)) if msg.contains("tls")),
             "expected validation error for partial TLS config: {result:?}"
         );
+    }
+
+    #[test]
+    fn dev_mode_defaults_to_false() {
+        let config = AppConfig::default();
+        assert!(!config.dev_mode);
+    }
+
+    #[test]
+    fn dev_mode_env_override_true() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_DEV_MODE" => Some("true".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+        assert!(config.dev_mode);
+    }
+
+    #[test]
+    fn dev_mode_env_override_one() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_DEV_MODE" => Some("1".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+        assert!(config.dev_mode);
+    }
+
+    #[test]
+    fn dev_mode_env_override_false() {
+        let mut config = AppConfig::default();
+        let env = |key: &str| -> Option<String> {
+            match key {
+                "KRAALZIBAR_DEV_MODE" => Some("false".to_string()),
+                _ => None,
+            }
+        };
+        config.apply_env_overrides_with(env);
+        assert!(!config.dev_mode);
+    }
+
+    #[test]
+    fn prepare_for_serve_rejects_no_db_no_dev() {
+        let config = AppConfig::default();
+        let result = config.prepare_for_serve(false);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("database URL"),
+            "error should mention database URL: {err}"
+        );
+    }
+
+    #[test]
+    fn prepare_for_serve_allows_dev_flag() {
+        let config = AppConfig::default();
+        let prepared = config.prepare_for_serve(true).unwrap();
+        assert!(prepared.dev_mode);
+    }
+
+    #[test]
+    fn prepare_for_serve_allows_dev_mode_config() {
+        let config = AppConfig {
+            dev_mode: true,
+            ..Default::default()
+        };
+        let prepared = config.prepare_for_serve(false).unwrap();
+        assert!(prepared.dev_mode);
+    }
+
+    #[test]
+    fn prepare_for_serve_allows_configured_db() {
+        let mut config = AppConfig::default();
+        config.database.url = "postgresql://localhost/test".to_string();
+        let prepared = config.prepare_for_serve(false).unwrap();
+        assert!(!prepared.dev_mode);
+    }
+
+    #[test]
+    fn prepare_for_serve_dev_mode_binds_localhost() {
+        let config = AppConfig::default();
+        let prepared = config.prepare_for_serve(true).unwrap();
+        assert_eq!(prepared.grpc.host, "127.0.0.1");
+        assert_eq!(prepared.rest.host, "127.0.0.1");
+    }
+
+    #[test]
+    fn prepare_for_serve_production_preserves_host() {
+        let mut config = AppConfig::default();
+        config.database.url = "postgresql://localhost/test".to_string();
+        config.grpc.host = "0.0.0.0".to_string();
+        config.rest.host = "0.0.0.0".to_string();
+        let prepared = config.prepare_for_serve(false).unwrap();
+        assert_eq!(prepared.grpc.host, "0.0.0.0");
+        assert_eq!(prepared.rest.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn dev_mode_from_toml() {
+        let toml_str = r#"
+dev_mode = true
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.dev_mode);
     }
 
     #[test]

@@ -88,7 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::PurgeRelationships { tenant_name, yes }) => {
             run_purge_relationships(&config, &tenant_name, yes).await
         }
-        Some(Command::Serve) | None => run_serve(config).await,
+        Some(Command::Serve { dev }) => run_serve(config, dev).await,
+        None => run_serve(config, false).await,
     }
 }
 
@@ -231,7 +232,9 @@ async fn purge_relationships(pool: &sqlx::PgPool, pg_schema: &str) -> Result<u64
     Ok(result.rows_affected())
 }
 
-async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_serve(config: AppConfig, cli_dev: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let config = config.prepare_for_serve(cli_dev)?;
+
     tracing::info!(
         grpc_addr = %config.grpc_addr(),
         rest_addr = %config.rest_addr(),
@@ -265,7 +268,10 @@ async fn run_serve(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> 
 
         start_server(config, factory, auth_state).await
     } else {
-        tracing::warn!("no database URL configured — running in dev mode (in-memory, no auth)");
+        tracing::error!(
+            "DEV MODE ACTIVE — in-memory storage, no authentication, \
+             bound to 127.0.0.1 only"
+        );
         let factory = Arc::new(InMemoryStoreFactory::new());
         let auth_state = AuthState::dev_mode();
 
