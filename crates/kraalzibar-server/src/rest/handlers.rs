@@ -1052,4 +1052,29 @@ mod tests {
         let ids = body["resource_ids"].as_array().unwrap();
         assert_eq!(ids.len(), 1);
     }
+
+    #[tokio::test]
+    async fn timeout_middleware_returns_json_408() {
+        use axum::middleware;
+        use axum::routing::get;
+
+        let app = axum::Router::new()
+            .route(
+                "/slow",
+                get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    "ok"
+                }),
+            )
+            .layer(middleware::from_fn(super::super::timeout_middleware(
+                std::time::Duration::from_millis(10),
+            )));
+
+        let server = TestServer::new(app).unwrap();
+        let response = server.get("/slow").await;
+
+        response.assert_status(StatusCode::REQUEST_TIMEOUT);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["error"], "request timeout");
+    }
 }

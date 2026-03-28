@@ -337,12 +337,19 @@ where
         service: Arc::clone(&service),
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = rest::create_router(rest_state, auth_state).route(
-        "/metrics",
-        axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
-    );
+    let request_timeout = std::time::Duration::from_secs(config.request_timeout_seconds);
+
+    let rest_router = rest::create_router(rest_state, auth_state)
+        .route(
+            "/metrics",
+            axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
+        )
+        .layer(axum::middleware::from_fn(rest::timeout_middleware(
+            request_timeout,
+        )));
 
     let grpc_router = tonic::transport::Server::builder()
+        .timeout(request_timeout)
         .add_service(health_service)
         .add_service(permission_svc)
         .add_service(relationship_svc)
