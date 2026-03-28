@@ -2,6 +2,7 @@ mod handlers;
 mod types;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
@@ -9,6 +10,7 @@ use axum::middleware;
 use axum::response::Response;
 use axum::routing::{get, post};
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 const MAX_REQUEST_BODY_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
@@ -112,5 +114,15 @@ where
             state.clone(),
             metrics_middleware,
         ))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list([]))
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ])
+                .max_age(Duration::from_secs(3600)),
+        )
         .with_state(state)
 }
