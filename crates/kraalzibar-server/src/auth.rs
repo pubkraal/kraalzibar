@@ -1,8 +1,14 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use rand::rngs::OsRng;
 
 use crate::audit;
 use kraalzibar_core::tuple::TenantId;
+
+fn argon2_instance() -> Result<Argon2<'static>, AuthError> {
+    let params = Params::new(47_104, 1, 1, None).map_err(|e| AuthError::Internal(e.to_string()))?;
+
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -51,16 +57,18 @@ pub fn parse_api_key(raw_key: &str) -> Result<(&str, &str), AuthError> {
 
 pub fn hash_secret(secret: &str) -> Result<String, AuthError> {
     let salt = argon2::password_hash::SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
+    let argon2 = argon2_instance()?;
     let hash = argon2
         .hash_password(secret.as_bytes(), &salt)
         .map_err(|e| AuthError::Internal(e.to_string()))?;
+
     Ok(hash.to_string())
 }
 
 pub fn verify_secret(secret: &str, hash: &str) -> Result<bool, AuthError> {
     let parsed_hash = PasswordHash::new(hash).map_err(|e| AuthError::Internal(e.to_string()))?;
-    Ok(Argon2::default()
+
+    Ok(argon2_instance()?
         .verify_password(secret.as_bytes(), &parsed_hash)
         .is_ok())
 }
@@ -161,6 +169,45 @@ mod tests {
         let hash = hash_secret("mysecret").unwrap();
         assert!(verify_secret("mysecret", &hash).unwrap());
         assert!(!verify_secret("wrongsecret", &hash).unwrap());
+    }
+
+    #[test]
+    fn hash_uses_argon2id_with_owasp_params() {
+        let hash = hash_secret("testsecret").unwrap();
+        let parsed = PasswordHash::new(&hash).unwrap();
+
+        assert_eq!(
+            parsed.algorithm,
+            argon2::Algorithm::Argon2id.ident(),
+            "algorithm must be argon2id"
+        );
+
+        let m_cost = parsed.params.get_str("m").unwrap().parse::<u32>().unwrap();
+        let t_cost = parsed.params.get_str("t").unwrap().parse::<u32>().unwrap();
+        let p_cost = parsed.params.get_str("p").unwrap().parse::<u32>().unwrap();
+
+        assert_eq!(m_cost, 47_104, "memory cost must be 46 MiB (OWASP)");
+        assert_eq!(t_cost, 1, "time cost must be 1 (OWASP)");
+        assert_eq!(p_cost, 1, "parallelism must be 1 (OWASP)");
+    }
+
+    #[test]
+    fn verify_secret_accepts_hash_from_old_default_params() {
+        let salt = argon2::password_hash::SaltString::generate(&mut OsRng);
+        let old_argon2 = Argon2::default();
+        let hash = old_argon2
+            .hash_password(b"testsecret", &salt)
+            .unwrap()
+            .to_string();
+
+        let parsed = PasswordHash::new(&hash).unwrap();
+        let m_cost = parsed.params.get_str("m").unwrap().parse::<u32>().unwrap();
+        assert_eq!(m_cost, 19_456, "fixture must use old default m_cost");
+
+        assert!(
+            verify_secret("testsecret", &hash).unwrap(),
+            "verify_secret must accept hashes produced by old Argon2::default() params"
+        );
     }
 
     #[test]
