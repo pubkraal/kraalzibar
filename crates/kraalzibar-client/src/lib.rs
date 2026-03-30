@@ -12,5 +12,5 @@ pub use client::{
     WriteRelationshipsResponse, WriteSchemaResponse,
 };
 pub use config::ClientOptions;
-pub use conversions::Consistency;
+pub use conversions::{Consistency, OpaqueToken};
 pub use error::ClientError;

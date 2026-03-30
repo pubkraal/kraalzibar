@@ -1,6 +1,25 @@
-use kraalzibar_core::tuple::{ObjectRef, SnapshotToken, SubjectRef, TupleFilter};
+use kraalzibar_core::tuple::{ObjectRef, SubjectRef, TupleFilter};
 
 use crate::proto::kraalzibar::v1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpaqueToken(String);
+
+impl OpaqueToken {
+    pub fn new(token: impl Into<String>) -> Self {
+        Self(token.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for OpaqueToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 pub fn domain_object_to_proto(obj: &ObjectRef) -> v1::ObjectReference {
     v1::ObjectReference {
@@ -48,21 +67,25 @@ pub fn consistency_to_proto(consistency: &Consistency) -> v1::Consistency {
         },
         Consistency::AtLeastAsFresh(token) => v1::Consistency {
             requirement: Some(v1::consistency::Requirement::AtLeastAsFresh(v1::ZedToken {
-                token: token.value().to_string(),
+                token: token.as_str().to_string(),
             })),
         },
         Consistency::AtExactSnapshot(token) => v1::Consistency {
             requirement: Some(v1::consistency::Requirement::AtExactSnapshot(
                 v1::ZedToken {
-                    token: token.value().to_string(),
+                    token: token.as_str().to_string(),
                 },
             )),
         },
     }
 }
 
-pub fn zed_token_to_snapshot(token: &v1::ZedToken) -> Option<SnapshotToken> {
-    token.token.parse::<u64>().ok().map(SnapshotToken::new)
+pub fn zed_token_to_opaque(token: &v1::ZedToken) -> Option<OpaqueToken> {
+    if token.token.is_empty() {
+        None
+    } else {
+        Some(OpaqueToken::new(&token.token))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -70,8 +93,8 @@ pub enum Consistency {
     FullConsistency,
     #[default]
     MinimizeLatency,
-    AtLeastAsFresh(SnapshotToken),
-    AtExactSnapshot(SnapshotToken),
+    AtLeastAsFresh(OpaqueToken),
+    AtExactSnapshot(OpaqueToken),
 }
 
 #[cfg(test)]
@@ -98,10 +121,10 @@ mod tests {
 
     #[test]
     fn consistency_converts_to_proto_at_least_as_fresh() {
-        let proto = consistency_to_proto(&Consistency::AtLeastAsFresh(SnapshotToken::new(42)));
+        let proto = consistency_to_proto(&Consistency::AtLeastAsFresh(OpaqueToken::new("abc123")));
         match proto.requirement {
             Some(v1::consistency::Requirement::AtLeastAsFresh(token)) => {
-                assert_eq!(token.token, "42");
+                assert_eq!(token.token, "abc123");
             }
             _ => panic!("expected AtLeastAsFresh"),
         }
@@ -109,10 +132,10 @@ mod tests {
 
     #[test]
     fn consistency_converts_to_proto_at_exact_snapshot() {
-        let proto = consistency_to_proto(&Consistency::AtExactSnapshot(SnapshotToken::new(99)));
+        let proto = consistency_to_proto(&Consistency::AtExactSnapshot(OpaqueToken::new("def456")));
         match proto.requirement {
             Some(v1::consistency::Requirement::AtExactSnapshot(token)) => {
-                assert_eq!(token.token, "99");
+                assert_eq!(token.token, "def456");
             }
             _ => panic!("expected AtExactSnapshot"),
         }
@@ -171,20 +194,20 @@ mod tests {
     }
 
     #[test]
-    fn zed_token_parses_to_snapshot() {
+    fn zed_token_converts_to_opaque() {
         let token = v1::ZedToken {
-            token: "42".to_string(),
+            token: "abc123def456".to_string(),
         };
-        let snapshot = zed_token_to_snapshot(&token);
-        assert_eq!(snapshot, Some(SnapshotToken::new(42)));
+        let opaque = zed_token_to_opaque(&token);
+        assert_eq!(opaque.as_ref().map(|t| t.as_str()), Some("abc123def456"));
     }
 
     #[test]
-    fn zed_token_invalid_returns_none() {
+    fn zed_token_empty_returns_none() {
         let token = v1::ZedToken {
-            token: "not-a-number".to_string(),
+            token: String::new(),
         };
-        let snapshot = zed_token_to_snapshot(&token);
-        assert!(snapshot.is_none());
+        let opaque = zed_token_to_opaque(&token);
+        assert!(opaque.is_none());
     }
 }

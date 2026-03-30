@@ -21,6 +21,9 @@ pub enum ApiError {
 
     #[error("schema not found")]
     SchemaNotFound,
+
+    #[error("invalid snapshot token format")]
+    InvalidToken,
 }
 
 fn format_validation_errors(errors: &[ValidationError]) -> String {
@@ -92,5 +95,11 @@ mod tests {
     fn api_error_schema_not_found() {
         let api_err = ApiError::SchemaNotFound;
         assert!(api_err.to_string().contains("schema not found"));
+    }
+
+    #[test]
+    fn api_error_invalid_token() {
+        let api_err = ApiError::InvalidToken;
+        assert!(api_err.to_string().contains("invalid snapshot token"));
     }
 }

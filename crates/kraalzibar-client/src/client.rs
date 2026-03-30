@@ -1,9 +1,9 @@
-use kraalzibar_core::tuple::{ObjectRef, SnapshotToken, SubjectRef, TupleFilter};
+use kraalzibar_core::tuple::{ObjectRef, SubjectRef, TupleFilter};
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 
 use crate::config::ClientOptions;
-use crate::conversions::{self, Consistency};
+use crate::conversions::{self, Consistency, OpaqueToken};
 use crate::error::ClientError;
 use crate::interceptor::ApiKeyInterceptor;
 use crate::proto::kraalzibar::v1::{
@@ -71,7 +71,7 @@ impl KraalzibarClient {
         let checked_at = response
             .checked_at
             .as_ref()
-            .and_then(conversions::zed_token_to_snapshot);
+            .and_then(conversions::zed_token_to_opaque);
 
         Ok(CheckPermissionResponse {
             allowed,
@@ -116,7 +116,7 @@ impl KraalzibarClient {
         let written_at = response
             .written_at
             .as_ref()
-            .and_then(conversions::zed_token_to_snapshot);
+            .and_then(conversions::zed_token_to_opaque);
 
         Ok(WriteRelationshipsResponse { written_at })
     }
@@ -232,7 +232,7 @@ impl KraalzibarClient {
         let written_at = response
             .written_at
             .as_ref()
-            .and_then(conversions::zed_token_to_snapshot);
+            .and_then(conversions::zed_token_to_opaque);
 
         Ok(WriteSchemaResponse {
             written_at,
@@ -273,7 +273,7 @@ impl KraalzibarClient {
         let expanded_at = response
             .expanded_at
             .as_ref()
-            .and_then(conversions::zed_token_to_snapshot);
+            .and_then(conversions::zed_token_to_opaque);
 
         Ok(ExpandPermissionTreeResponse {
             expanded_at,
@@ -293,7 +293,7 @@ pub struct CheckPermissionRequest {
 #[derive(Debug, Clone)]
 pub struct CheckPermissionResponse {
     pub allowed: bool,
-    pub checked_at: Option<SnapshotToken>,
+    pub checked_at: Option<OpaqueToken>,
 }
 
 #[derive(Debug, Clone)]
@@ -312,7 +312,7 @@ pub struct RelationshipUpdate {
 
 #[derive(Debug, Clone)]
 pub struct WriteRelationshipsResponse {
-    pub written_at: Option<SnapshotToken>,
+    pub written_at: Option<OpaqueToken>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,7 +348,7 @@ pub struct LookupSubjectsRequest {
 
 #[derive(Debug, Clone)]
 pub struct WriteSchemaResponse {
-    pub written_at: Option<SnapshotToken>,
+    pub written_at: Option<OpaqueToken>,
     pub breaking_changes_overridden: bool,
 }
 
@@ -361,6 +361,6 @@ pub struct ExpandPermissionTreeRequest {
 
 #[derive(Debug, Clone)]
 pub struct ExpandPermissionTreeResponse {
-    pub expanded_at: Option<SnapshotToken>,
+    pub expanded_at: Option<OpaqueToken>,
     pub tree: Option<v1::PermissionExpansionTree>,
 }
