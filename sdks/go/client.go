@@ -31,8 +31,8 @@ func NewClient(target string, opts ...ClientOption) (*Client, error) {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 	if cfg.apiKey != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(apiKeyInterceptor(cfg.apiKey)))
-		dialOpts = append(dialOpts, grpc.WithStreamInterceptor(apiKeyStreamInterceptor(cfg.apiKey)))
+		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(apiKeyInterceptor(string(cfg.apiKey))))
+		dialOpts = append(dialOpts, grpc.WithStreamInterceptor(apiKeyStreamInterceptor(string(cfg.apiKey))))
 	}
 
 	conn, err := grpc.NewClient(target, dialOpts...)
