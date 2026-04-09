@@ -42,6 +42,7 @@ export type ClientOptions = {
   target: string;
   apiKey?: string;
   timeout?: number;
+  maxResponseSize?: number;
   fetch?: typeof globalThis.fetch;
 };
 
@@ -55,6 +56,7 @@ export const createClient = (options: ClientOptions): KraalzibarClient => {
       target: options.target,
       apiKey: options.apiKey,
       timeout: options.timeout,
+      maxResponseSize: options.maxResponseSize,
     },
     options.fetch,
   );
