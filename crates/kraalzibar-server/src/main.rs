@@ -14,12 +14,14 @@ use kraalzibar_server::proto::kraalzibar::v1::{
     relationship_service_server::RelationshipServiceServer,
     schema_service_server::SchemaServiceServer,
 };
+use kraalzibar_server::rate_limit::RateLimitState;
 use kraalzibar_server::rest;
 use kraalzibar_server::service::AuthzService;
 use kraalzibar_server::tls::{TlsConfigOptions, build_tls_server_config};
 use kraalzibar_storage::InMemoryStoreFactory;
 use kraalzibar_storage::traits::{RelationshipStore, SchemaStore, StoreFactory};
 use tokio_stream::StreamExt;
+use tower::limit::ConcurrencyLimitLayer;
 
 use kraalzibar_core::tuple::TenantId;
 use tracing_subscriber::EnvFilter;
@@ -283,6 +285,8 @@ where
     F::Store: RelationshipStore + SchemaStore,
 {
     let metrics = Arc::new(Metrics::new());
+    let rate_limit = RateLimitState::new(&config.rate_limit);
+    let auth_state = auth_state.with_rate_limit(rate_limit.clone());
     let service = Arc::new(
         AuthzService::with_cache_config(
             Arc::clone(&factory),
@@ -337,12 +341,23 @@ where
         service: Arc::clone(&service),
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = rest::create_router(rest_state, auth_state).route(
+    let rest_router = rest::create_router(rest_state, auth_state, rate_limit).route(
         "/metrics",
         axum::routing::get(metrics::metrics_handler).with_state(Arc::clone(&metrics)),
     );
 
+    let concurrency_limit = if config.rate_limit.max_concurrent_requests > 0 {
+        tracing::info!(
+            max_concurrent = config.rate_limit.max_concurrent_requests,
+            "global concurrency limit enabled"
+        );
+        config.rate_limit.max_concurrent_requests
+    } else {
+        usize::MAX
+    };
+
     let grpc_router = tonic::transport::Server::builder()
+        .layer(ConcurrencyLimitLayer::new(concurrency_limit))
         .add_service(health_service)
         .add_service(permission_svc)
         .add_service(relationship_svc)

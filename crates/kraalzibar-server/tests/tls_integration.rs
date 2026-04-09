@@ -281,7 +281,10 @@ async fn rest_tls_connection_succeeds() {
         service: Arc::clone(&service),
         metrics: Arc::clone(&metrics),
     };
-    let rest_router = kraalzibar_server::rest::create_router(rest_state, auth_state);
+    let rate_limit = kraalzibar_server::rate_limit::RateLimitState::new(
+        &kraalzibar_server::config::RateLimitConfig::default(),
+    );
+    let rest_router = kraalzibar_server::rest::create_router(rest_state, auth_state, rate_limit);
 
     let rest_tls_config = axum_server::tls_rustls::RustlsConfig::from_config(rest_tls);
     let rest_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();

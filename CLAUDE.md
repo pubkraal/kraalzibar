@@ -307,3 +307,14 @@ configuration instructions as they become available.
 - **rcgen 0.13 API change**: `CertificateParams::self_signed(&key_pair)`
   returns `Certificate` without a `key_pair` field. The `KeyPair` must be
   kept separately for `serialize_pem()`.
+- **tonic `Server::builder().layer()` changes the Router type**: Adding a
+  tower layer via `.layer()` on the tonic server builder changes the generic
+  type parameter. Conditional layer application (if/else) produces incompatible
+  types. Work around by always applying `ConcurrencyLimitLayer` with
+  `usize::MAX` when "unlimited" is desired.
+- **`moka::sync::Cache` for rate limiting**: Use `sync` (not `future`) for
+  auth failure tracking since the gRPC interceptor is synchronous
+  (`block_in_place`). TTL provides natural sliding window expiry.
+- **Rate limit config `0` means unlimited**: Both `max_concurrent_requests`
+  and `max_requests_per_tenant_per_second` treat 0 as "no limit". The
+  concurrency layer uses `usize::MAX` in that case.
